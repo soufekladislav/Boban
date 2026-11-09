@@ -1,4 +1,4 @@
-"""Evidence-first project memory and analytical toolset for Boban.
+"""Evidence-first project memory and analytical toolset for Boban (v0.9.14.0).
 
 Read-only with respect to marketing platforms. Persistent notes are only facts
 from local authoritative records or explicitly user-confirmed decisions.
@@ -106,7 +106,6 @@ def sync_project_facts(conn,backend,project_id):
     rows=conn.execute('SELECT provider,status,updated_at FROM integrations WHERE project_id=?',(project_id,)).fetchall()
     for row in rows:
         provider=str(row['provider']); status=str(row['status'])
-        # Connected is not equivalent to having working API data.
         upsert_memory(conn,backend,project_id,'integration:'+provider,'integration',
             f'{provider}: stav konektoru {status}; dostupnost dat se ověřuje zvlášť.',
             'integrations',provider,{'status':status,'updated_at':row['updated_at']},
@@ -132,63 +131,94 @@ def _snapshot(conn,pid,source):
 
 
 def analyze(conn,project_id,question):
-    """Deterministic bounded tool call; not an LLM-generated calculation."""
-    tool=tool_for_question(question)
-    ga4,gsrc=_snapshot(conn,project_id,'ga4')
-    gsc,ssrc=_snapshot(conn,project_id,'search_console')
-    sources=[s for s in (gsrc,ssrc) if s]
-    result={'tool':tool,'evidence_sources':sources,'limitations':[], 'facts':{}}
-    period=ga4.get('period') or {}; current=ga4.get('current_total') or {}; organic=ga4.get('current_organic') or {}
-    result['facts']['ga4']={'period':period,'sessions':current.get('sessions'), 'organic_sessions':organic.get('sessions')}
-    result['facts']['gsc']={'period':gsc.get('period'), 'current':gsc.get('current') or {}}
-    if tool=='search_demand':
-        result['facts']['queries']=(gsc.get('top_queries') or [])[:12]
-        result['facts']['query_pages']=(gsc.get('query_pages') or [])[:12]
-    elif tool=='landing_opportunities':
-        result['facts']['landing_pages']=(ga4.get('extended_reports') or {}).get('landing_pages_all',[])[:15]
-        result['facts']['gsc_pages']=(gsc.get('top_pages') or [])[:15]
-        result['limitations'].append('URL lze porovnávat napříč systémy, jednotlivé dotazy nelze přiřadit k objednávkám.')
-    elif tool=='channel_readiness':
-        rows=conn.execute('SELECT provider,status,updated_at FROM integrations WHERE project_id=?',(project_id,)).fetchall()
-        result['facts']['connections']=[_d(r) for r in rows]
-        result['facts']['channels']=(ga4.get('extended_reports') or {}).get('channels',[])[:18]
-        result['limitations'].append('Připojený katalog neznamená měřitelný přínos prodeje.')
-    elif tool=='conversion_reality':
-        outcome_rows=conn.execute('SELECT outcome_type,status,test_record,amount,currency FROM analytics_business_outcomes WHERE project_id=? ORDER BY id DESC LIMIT 1000',(project_id,)).fetchall()
-        verified=[r for r in outcome_rows if r['test_record']==0]
-        result['facts']['business_outcomes']={'source_connected_and_verified':bool(outcome_rows),
-            'real_orders_in_loaded_sample':sum(1 for r in verified if r['outcome_type']=='order' and r['status'] not in ('failed','cancelled','refunded','trash')) if outcome_rows else None,
-            'note':'Není to úplná statistika období; kontroluje jen dostupnost ověřených obchodních záznamů.'}
-        result['facts']['events']=(ga4.get('extended_reports') or {}).get('commerce_events',[])[:20]
-        if not outcome_rows:result['limitations'].append('Chybí ověřený čtecí zdroj objednávek/poptávek; nula v GA4 není důkaz nulového prodeje.')
+    """Deterministický obchodní mozek Bobana (v0.9.14.0).
+    Místo hromadného generování SEO chyb vyhodnocuje 3 klíčové obchodní priority:
+    1. Kontrola slepoty / měření (purchase, poptávky, košík)
+    2. Rychlé prodejní příležitosti (Quick Wins v Search Console / GA4)
+    3. Akvizice a rozvoj kanálů (např. Bing, katalogové feedy pro Viki)
+    """
+    tool = tool_for_question(question)
+    ga4, gsrc = _snapshot(conn, project_id, 'ga4')
+    gsc, ssrc = _snapshot(conn, project_id, 'search_console')
+    
+    project_row = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    project = dict(project_row) if project_row else {}
+    
+    sources = [s for s in (gsrc, ssrc) if s]
+    result = {'tool': tool, 'evidence_sources': sources, 'limitations': [], 'facts': {}}
+    
+    period = ga4.get('period') or {}
+    current = ga4.get('current_total') or {}
+    organic = ga4.get('current_organic') or {}
+    
+    result['facts']['ga4'] = {
+        'period': period, 
+        'sessions': current.get('sessions'), 
+        'organic_sessions': organic.get('sessions'),
+        'keyEvents': current.get('keyEvents'),
+        'totalRevenue': current.get('totalRevenue')
+    }
+    result['facts']['gsc'] = {'period': gsc.get('period'), 'current': gsc.get('current') or {}}
+    
+    outcome_rows = conn.execute('SELECT outcome_type, status, test_record, amount, currency FROM analytics_business_outcomes WHERE project_id=? ORDER BY id DESC LIMIT 1000', (project_id,)).fetchall()
+    verified_outcomes = [r for r in outcome_rows if r['test_record'] == 0]
+    real_orders = sum(1 for r in verified_outcomes if r['outcome_type'] == 'order' and r['status'] not in ('failed', 'cancelled', 'refunded', 'trash')) if outcome_rows else 0
+    
+    result['facts']['business_outcomes'] = {
+        'source_connected_and_verified': bool(outcome_rows),
+        'real_orders': real_orders,
+    }
+
+    business_initiatives = []
+    
+    if not outcome_rows and current.get('keyEvents', 0) == 0:
+        business_initiatives.append({
+            'priority': 1,
+            'title': 'Zprovoznit a ověřit nákupní měření (Funnel)',
+            'reason': 'Nemáme spolehlivě potvrzené konverze ani nákupní události (purchase / poptávky). Dokud nevidíme peníze, nemá smysl plýtvat energií na SEO.',
+            'action_needed': 'Zkontrolovat GA4 a GTM měření, ověřit průchodnost košíku.',
+            'owner': 'Boban + Uživatel'
+        })
     else:
-        result['facts']['channels']=(ga4.get('extended_reports') or {}).get('channels',[])[:10]
-        result['facts']['top_queries']=(gsc.get('top_queries') or [])[:8]
-    # Evidence-backed prompts for investigation, not unsupported sales claims.
-    next_steps=[]
-    if tool=='conversion_reality' and not result['facts'].get('business_outcomes',{}).get('source_connected_and_verified'):
-        next_steps.append({'priority':'high','action':'Zajistit ověřené souhrny skutečných objednávek/poptávek',
-            'why':'Bez nich nelze dokázat obchodní přínos marketingu.',
-            'needs_user':'Potvrdit zdroj dat a rozlišení testovacích záznamů.'})
-    if tool=='search_demand':
-        pages=result['facts'].get('query_pages') or []
-        row=next((r for r in pages if (r.get('keys') or []) and (r.get('impressions') or 0)>0),None)
-        if row:
-            keys=row.get('keys') or []
-            next_steps.append({'priority':'medium','action':'Prověřit nákupní záměr konkrétního dotazu',
-                'query':str(keys[0])[:150],'page':str(keys[1])[:280] if len(keys)>1 else '',
-                'why':'Dotaz a stránka jsou doloženy v Search Console; nejde o připsaný prodej.'})
-    if tool=='channel_readiness' and not result['facts'].get('channels'):
-        next_steps.append({'priority':'medium','action':'Ověřit měření katalogových návštěv v GA4',
-            'why':'Aktivní feed sám nedokazuje návštěvy nebo objednávky.'})
-    result['next_steps']=next_steps
-    if not ga4:result['limitations'].append('GA4 snapshot není k dispozici.')
-    if not gsc:result['limitations'].append('Search Console snapshot není k dispozici.')
-    for src in sources:
-        try:
-            if datetime.now()-datetime.fromisoformat(src['captured_at'])>timedelta(days=2):
-                result['limitations'].append('Starší snapshot: '+src['source']+' ('+str(src['captured_at'])+').')
-        except (TypeError,ValueError):pass
+        business_initiatives.append({
+            'priority': 1,
+            'title': 'Měření konverzí je aktivní',
+            'reason': f'Zaznamenáváme konverzní události. Aktuální tržby / klíčové akce: {current.get("keyEvents", 0)} událostí.',
+            'action_needed': 'Průběžně sledovat trend v čase.',
+            'owner': 'Boban'
+        })
+
+    queries = (gsc.get('top_queries') or [])
+    if queries:
+        business_initiatives.append({
+            'priority': 2,
+            'title': 'Využít existující zobrazení (Quick Wins)',
+            'reason': 'Našli jsme dotazy a stránky, které už lidi ve vyhledávání vidí, ale neproklikávají se na ně v dostatečné míře.',
+            'action_needed': 'Upravit prodejní titulky a prolinkovat klíčové vstupní stránky.',
+            'owner': 'Boban'
+        })
+    else:
+        business_initiatives.append({
+            'priority': 2,
+            'title': 'Rozšířit organickou akvizici',
+            'reason': 'Search Console zatím neposkytuje dostatek dat pro optimalizaci pozic.',
+            'action_needed': 'Zkontrolovat sitemapu a indexaci stránek.',
+            'owner': 'Boban'
+        })
+
+    business_initiatives.append({
+            'priority': 3,
+            'title': 'Rozšířit akviziční kanály (Bing / Zboží / Heureka)',
+            'reason': 'Spoléhat se jen na Google nestačí. Zapojením Bingu (cez IndexNow) a srovnávačů přivedeme relevantní zákazníky rychleji.',
+            'action_needed': 'Potvrdit propojení katalogů (Viki) a ověřit IndexNow.',
+            'owner': 'Viki + Boban'
+    })
+
+    result['facts']['business_initiatives'] = business_initiatives
+    result['next_steps'] = [{'priority': 'high', 'action': x['title'], 'why': x['reason'], 'needs_user': x['owner']} for x in business_initiatives]
+    
+    if not ga4: result['limitations'].append('GA4 snapshot není k dispozici.')
+    if not gsc: result['limitations'].append('Search Console snapshot není k dispozici.')
     return result
 
 
@@ -214,26 +244,16 @@ def fallback_answer(analysis):
     """Truthful Czech response when AI Engine is unavailable; never invent conversions."""
     facts=analysis.get('facts') or {}
     ga=facts.get('ga4') or {}
-    pieces=['Z dostupných dat mohu potvrdit:']
+    initiatives = facts.get('business_initiatives') or []
+    
+    pieces=['Zde jsou aktuální obchodní priority pro růst prodeje:']
+    for idx, init in enumerate(initiatives, 1):
+        pieces.append(f"{idx}. **{init.get('title')}**\n   - *Důvod:* {init.get('reason')}\n   - *Krok:* {init.get('action_needed')}")
+        
     if ga.get('sessions') is not None:
         period=ga.get('period') or {}
-        pieces.append('GA4: {} relací ({} až {}).'.format(ga['sessions'],period.get('start','?'),period.get('end','?')))
-    else:pieces.append('Spolehlivý počet relací GA4 nyní nemám.')
-    if analysis.get('tool')=='conversion_reality':
-        outcome=facts.get('business_outcomes') or {}
-        if not outcome.get('source_connected_and_verified'):
-            pieces.append('Skutečné objednávky a poptávky nejsou ověřeně napojené. Neznamená to nula prodejů.')
-    elif analysis.get('tool')=='search_demand':
-        queries=facts.get('queries') or []
-        if queries:
-            row=queries[0];keys=row.get('keys') or []
-            pieces.append('Nejvýše v načteném výpisu Search Console: {} ({} impresí, {} kliknutí).'.format(
-                (keys[0] if keys else 'bez dotazu'),row.get('impressions','?'),row.get('clicks','?')))
-    elif analysis.get('tool')=='channel_readiness':
-        connections=facts.get('connections') or []
-        if connections:
-            pieces.append('Stavy konektorů: '+', '.join(str(x.get('provider'))+'='+str(x.get('status')) for x in connections[:8])+'.')
-    for limitation in (analysis.get('limitations') or [])[:3]:pieces.append('Omezení: '+limitation)
-    for step in (analysis.get('next_steps') or [])[:2]:pieces.append('Další ověření: '+step.get('action','')+'.')
-    pieces.append('Analýza byla provedena nad uloženými daty; AI Engine není nyní dostupný.')
+        pieces.append('\n*GA4 souhrn:* {} relací ({} až {}).'.format(ga['sessions'],period.get('start','?'),period.get('end','?')))
+        
+    for limitation in (analysis.get('limitations') or [])[:3]: pieces.append('Omezení: '+limitation)
+    pieces.append('\nAnalýza byla provedena nad uloženými daty; AI Engine není nyní dostupný.')
     return '\n\n'.join(pieces)
