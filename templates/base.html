@@ -1,0 +1,113 @@
+<!doctype html>
+<html lang="cs">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#000000">
+  <title>{% block title %}Web Booster{% endblock %}</title>
+  <link rel="icon" href="{{ fresh_logo_url }}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url_for('static', filename='app.css', v=app_version+'-chat-queue-091324') }}">
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{% if current_user.is_authenticated %}
+<div class="app-frame">
+  <aside class="app-sidebar" data-sidebar>
+    <div class="sidebar-top">
+      <a class="sidebar-brand" href="{{ url_for('dashboard') }}">
+        <img src="{{ fresh_logo_url }}" alt="Fresh Crackers">
+        <span><strong>Web Booster</strong><small>Boban • SEO & growth</small></span>
+      </a>
+      <button class="sidebar-close" type="button" data-sidebar-close aria-label="Zavřít menu">×</button>
+    </div>
+    <div class="sidebar-section project-picker-section">
+      <label class="sidebar-label" for="project-picker">PROJEKT</label>
+      <select id="project-picker" class="project-picker" aria-label="Vybrat projekt" data-project-picker>
+        <option value="{{ url_for('dashboard') }}" {{ 'selected' if project is not defined else '' }}>Přehled projektů</option>
+        {% for p in sidebar_projects %}<option value="{{ url_for('project', project_id=p.id) }}" {{ 'selected' if project is defined and project.id == p.id else '' }}>{{ p.name }}</option>{% endfor %}
+      </select>
+      <div class="project-picker-links"><a href="{{ url_for('dashboard') }}">Spravovat</a>{% if current_user.can_edit %}<a href="{{ url_for('project_new') }}" aria-label="Přidat projekt">+ Přidat</a>{% endif %}</div>
+    </div>
+    {% if project is defined %}
+    <nav class="sidebar-nav" aria-label="Navigace projektu">
+      <div class="sidebar-label">{{ project.name }}{% if project_access_role(project.id)=='visitor' %}<span class="read-only-label">READ ONLY</span>{% endif %}</div>
+      <a href="{{ url_for('project', project_id=project.id) }}" class="{{ 'active' if request.endpoint=='project' else '' }}"><span>●</span> Boban</a>
+      <a href="{{ url_for('project_goals', project_id=project.id) }}" class="{{ 'active' if request.endpoint=='project_goals' else '' }}"><span>◎</span> Cíle</a>
+      <a href="{{ url_for('actions', project_id=project.id, view='todo') }}" class="{{ 'active' if request.endpoint in ['actions','action_apply','action_edit','actions_bulk_apply','actions_state','action_verify'] and request.args.get('view','todo')!='done' else '' }}"><span>✓</span> Úkoly</a>
+      <a href="{{ url_for('project_statistics', project_id=project.id) }}" class="{{ 'active' if request.endpoint=='project_statistics' else '' }}"><span>▥</span> Statistiky</a>
+  <a href="{{ url_for('business_results', project_id=project.id) }}" class="{{ 'active' if request.endpoint=='business_results' else '' }}"><span>↗</span> Výsledky</a>
+
+      <div class="sidebar-label sidebar-tools-label">Nástroje</div>
+      <a href="{{ url_for('seo', project_id=project.id) }}" class="{{ 'active' if request.endpoint in ['seo','seo_finding','seo_hidden'] else '' }}"><span>◎</span> SEO audit</a>
+      <a href="{{ url_for('ecommerce', project_id=project.id) }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('ecommerce') else '' }}"><span>▣</span> E-commerce</a>
+      <a href="{{ url_for('connectors', project_id=project.id) }}" class="{{ 'active' if request.endpoint=='connectors' else '' }}"><span>⛓</span> Konektory</a>
+      <a href="{{ url_for('knowledge', project_id=project.id) }}" class="{{ 'active' if request.endpoint in ['knowledge','knowledge_article'] else '' }}"><span>i</span> SEO poradna</a>
+      <a href="{{ url_for('project_access', project_id=project.id) }}" class="{{ 'active' if request.endpoint and request.endpoint.startswith('project_access') else '' }}"><span>♙</span> Propojení</a>
+    </nav>
+    {% endif %}
+    <div class="sidebar-bottom">
+      {% if current_user.is_admin %}<a class="sidebar-admin-link" href="{{ url_for('admin_console') }}"><span>⚙</span><span>Admin console</span></a>{% endif %}
+
+      <div class="sidebar-user"><span class="user-avatar">{{ current_user.name[:1]|upper }}</span><div><strong>{{ current_user.name }}</strong><small class="account-role">{{ current_user.role|upper }}</small><a href="{{ url_for('logout') }}">Odhlásit</a></div></div>
+    </div>
+  </aside>
+  <div class="sidebar-backdrop" data-sidebar-backdrop></div>
+  <div class="app-stage">
+    <header class="desktop-topbar"><div class="topbar-project">{% if project is defined %}<strong>{{ project.name }}</strong><small>{{ project.site_url }}</small>{% else %}<strong>Web Booster</strong>{% endif %}</div><div class="topbar-actions"><button type="button" class="topbar-bell" data-notification-toggle aria-label="Oznámení" title="Oznámení">🔔{% if notification_unread %}<b data-notification-count>{{ notification_unread }}</b>{% else %}<b data-notification-count hidden>0</b>{% endif %}</button><span class="topbar-user">{{ current_user.name }}</span></div></header>
+    <header class="mobile-topbar">
+      <button type="button" class="mobile-menu" data-sidebar-open aria-label="Otevřít menu">☰</button>
+      <a class="mobile-brand" href="{{ url_for('dashboard') }}"><img src="{{ fresh_logo_url }}" alt=""><strong>Web Booster</strong></a>
+      <button class="mobile-notification" type="button" data-notification-toggle aria-label="Oznámení">🔔{% if notification_unread %}<b data-notification-count>{{ notification_unread }}</b>{% else %}<b data-notification-count hidden>0</b>{% endif %}</button>
+    </header>
+    <main class="shell">
+      {% with messages = get_flashed_messages(with_categories=true) %}
+        {% for category, message in messages %}<div class="flash {{ category }}">{{ message }}</div>{% endfor %}
+      {% endwith %}
+{% else %}
+<main class="public-shell">
+{% endif %}
+
+{% block content %}{% endblock %}
+
+{% if current_user.is_authenticated %}
+    </main>
+    <footer class="app-footer"><span>Created by</span><a href="https://www.freshcrackers.cz/" target="_blank" rel="noopener">Fresh Crackers</a><span class="footer-version">Web Booster {{ app_version }}</span></footer>
+  </div>
+</div>
+{% if project is defined and request.endpoint != 'project' %}
+<button class="global-boban-toggle" type="button" data-global-boban-open aria-controls="global-boban" aria-expanded="false">◉ Boban · chat</button>
+<div class="global-boban-backdrop" data-global-boban-backdrop hidden></div>
+<aside id="global-boban" class="global-boban-drawer" aria-label="Chat s Bobanem" data-global-boban
+  data-history-url="{{ url_for('project_chat_recent', project_id=project.id) }}"
+  data-send-url="{{ url_for('project_chat', project_id=project.id) }}" aria-hidden="true">
+  <div class="global-boban-head"><div><strong>Boban</strong><small>{{ project.name }} · společná konverzace</small></div><button type="button" data-global-boban-close aria-label="Zavřít chat">×</button></div>
+  <div class="global-boban-history" data-global-boban-messages aria-live="polite"><p class="muted">Načítám aktuální konverzaci…</p></div>
+  <form data-global-boban-form class="global-boban-form">
+    <textarea name="body" rows="3" placeholder="Zeptej se Bobana…" required aria-label="Zpráva Bobanovi"></textarea>
+    <button class="btn primary" type="submit">Odeslat ↑</button>
+  </form>
+</aside>
+{% endif %}
+{% if project is defined %}
+<nav class="mobile-project-nav" aria-label="Rychlá navigace projektu">
+  <a href="{{ url_for('project', project_id=project.id) }}" class="{{ 'active' if request.endpoint=='project' else '' }}"><span>●</span>Boban</a>
+  <a href="{{ url_for('project_goals', project_id=project.id) }}"><span>◎</span>Cíle</a>
+  <a href="{{ url_for('actions', project_id=project.id, view='todo') }}"><span>✓</span>Úkoly</a>
+  <a href="{{ url_for('project_statistics', project_id=project.id) }}"><span>▥</span>Statistiky</a>
+  <a href="{{ url_for('business_results', project_id=project.id) }}"><span>↗</span>Výsledky</a>
+  <button type="button" data-sidebar-open><span>☰</span>Více</button>
+</nav>
+{% endif %}
+<div class="notification-panel" data-notification-panel hidden>
+  <div class="notification-panel-head"><div><strong>Bobanovy zprávy</strong><small>Co dělám, co je hotové a kde potřebuji tvoje rozhodnutí.</small></div><button type="button" data-notification-close aria-label="Zavřít">×</button></div>
+  <div class="notification-list" data-notification-list><div class="muted small">Načítám zprávy…</div></div>
+  <button class="notification-read-all" type="button" data-notification-read-all>Označit vše jako přečtené</button>
+</div>
+{% else %}
+</main>
+{% endif %}
+<script src="{{ url_for('static', filename='app.js', v=app_version+'-chat-queue-091324') }}" defer></script>
+</body>
+</html>

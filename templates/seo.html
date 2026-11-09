@@ -1,0 +1,120 @@
+{% extends "base.html" %}
+{% block title %}SEO audit – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a>
+    <h1>SEO audit</h1>
+    <p class="lead-sm">Neukazuji zelenou stovku jen proto, že web nepadá. Odděluji technický stav, obsah a autoritu a u výsledku vždy ukazuji, kolik webu jsem skutečně prověřil.</p>
+  </div>
+  <div class="actions compact">
+    <form method="post" action="{{ url_for('core_sync', project_id=project.id) }}"><button class="btn">Synchronizovat Core</button></form>
+    <form method="post" action="{{ url_for('seo_crawl', project_id=project.id) }}"><button class="btn primary">Spustit crawler</button></form>
+  </div>
+</div>
+
+<section class="card score-v2" id="score-help">
+  <div class="score-v2-main">
+    <span class="eyebrow">SEO PŘIPRAVENOST</span>
+    <div class="score-v2-number"><strong>{{ scorecard.overall }}/100</strong><span>{{ score_info.label }}</span></div>
+    <p>{{ score_info.target }}</p>
+    <div class="coverage-line">
+      <span>Pokrytí auditu</span>
+      <progress max="100" value="{{ scorecard.coverage.overall }}"></progress>
+      <b>{{ scorecard.coverage.overall }} %</b>
+    </div>
+    <small class="muted">Crawler ověřil {{ scorecard.coverage.pages_checked }} z {{ scorecard.coverage.url_count or project.seo_url_count or 0 }} SEO URL. Nízké pokrytí snižuje technické skóre – raději budu přísný než falešně optimistický.</small>
+  </div>
+  <div class="score-v2-rules">
+    <div><b>90–100</b><span>silný základ, ne „hotové SEO“</span></div>
+    <div><b>75–89</b><span>dobrý základ s rezervami</span></div>
+    <div><b>55–74</b><span>výrazný prostor ke zlepšení</span></div>
+    <div><b>&lt;55</b><span>slabý SEO základ / málo ověřených dat</span></div>
+  </div>
+</section>
+
+<div class="pillar-grid mobile-carousel" data-mobile-carousel>
+  <a class="card pillar-card {{ 'active' if selected_pillar=='technical' }}" href="{{ url_for('seo', project_id=project.id, pillar='technical', kind=selected_kind or '') }}">
+    <div class="pillar-card-top"><span>Technické SEO</span><strong>{{ scorecard.technical }}/100</strong></div>
+    <p>Crawl, HTTP stav, indexace, noindex, canonical a technická dostupnost.</p>
+    <small>Ověřeno crawlerem: {{ scorecard.coverage.crawler }} % URL</small>
+  </a>
+  <a class="card pillar-card {{ 'active' if selected_pillar=='content' }}" href="{{ url_for('seo', project_id=project.id, pillar='content', kind=selected_kind or '') }}">
+    <div class="pillar-card-top"><span>Obsahové SEO</span><strong>{{ scorecard.content }}/100</strong></div>
+    <p>SEO title, description, H1, obsah, obrázky, duplicity a tématická srozumitelnost.</p>
+    <small>Fresh Core kontroluje CMS napříč webem; crawler ověřuje výsledné HTML.</small>
+  </a>
+  <a class="card pillar-card authority {{ 'active' if selected_pillar=='authority' }}" href="{{ url_for('seo', project_id=project.id, pillar='authority', kind=selected_kind or '') }}">
+    <div class="pillar-card-top"><span>Autorita a odkazy</span><strong>bez dat</strong></div>
+    <p>Interní prolinkování už sleduji. Externí autoritu a zpětné odkazy nebudu hádat bez spolehlivého zdroje.</p>
+    <small>Po připojení backlink dat doplníme skutečné měření autority.</small>
+  </a>
+</div>
+
+<div class="info-block wide-info">
+  <div>
+    <b>Jak skóre počítám od v0.7.0</b>
+    <span>Příležitosti už nejsou „zadarmo“. Rozsáhlé chybějící title, popisy, ALT, H1 nebo prolinkování skóre skutečně snižují. Stejný problém z Fresh Core a crawleru nesčítám dvakrát. Autoritu zatím do čísla nezahrnuji, protože nemáme backlink data.</span>
+  </div>
+</div>
+
+<div class="metrics-grid metrics-5 interactive-metrics mobile-carousel" data-mobile-carousel>
+  <a class="card metric-card emphasis" href="#score-help"><span>SEO připravenost</span><strong>{{ scorecard.overall }}/100</strong><small>kritické skóre, vyšší je lepší</small></a>
+  <a class="card metric-card" href="{{ url_for('seo', project_id=project.id, kind='error', pillar=selected_pillar or '') }}"><span>Chyby</span><strong>{{ kinds.error }}</strong><small>potvrzené problémy</small></a>
+  <a class="card metric-card" href="{{ url_for('seo', project_id=project.id, kind='warning', pillar=selected_pillar or '') }}"><span>Varování</span><strong>{{ kinds.warning }}</strong><small>stojí za ověření</small></a>
+  <a class="card metric-card" href="{{ url_for('seo', project_id=project.id, kind='opportunity', pillar=selected_pillar or '') }}"><span>Příležitosti</span><strong>{{ kinds.opportunity }}</strong><small>reálné rezervy, ne nulová váha</small></a>
+  <a class="card metric-card" href="{{ url_for('seo_hidden', project_id=project.id) }}"><span>Odložené / skryté</span><strong>{{ suppressed_count }}</strong><small>crawler je nevrací mezi aktivní</small></a>
+</div>
+
+<div class="chip-row seo-filter-row">
+  <a class="chip {{ 'active' if not selected_pillar and not selected_category }}" href="{{ url_for('seo', project_id=project.id, kind=selected_kind or '') }}">Vše</a>
+  <a class="chip {{ 'active' if selected_pillar=='technical' }}" href="{{ url_for('seo', project_id=project.id, pillar='technical', kind=selected_kind or '') }}">Technické SEO <span>{{ scorecard.technical }}/100</span></a>
+  <a class="chip {{ 'active' if selected_pillar=='content' }}" href="{{ url_for('seo', project_id=project.id, pillar='content', kind=selected_kind or '') }}">Obsahové SEO <span>{{ scorecard.content }}/100</span></a>
+  <a class="chip {{ 'active' if selected_pillar=='authority' }}" href="{{ url_for('seo', project_id=project.id, pillar='authority', kind=selected_kind or '') }}">Autorita a odkazy <span>bez dat</span></a>
+</div>
+
+<div class="seo-layout-clean">
+  <section class="card table-card">
+    <div class="panel-head">
+      <div><strong>Aktivní nálezy</strong><div class="muted small">Stejné nálezy seskupuji. Boban umí část rovnou převést na návrh opravy; ostatní zůstávají jako kontrola nebo doporučení.</div></div>
+      <span class="badge">{{ findings|length }} skupin</span>
+    </div>
+    <div class="finding-list">
+      {% for f in findings %}
+      <div class="finding-row clickable-row">
+        <div class="finding-marker {{ f.kind }}"></div>
+        <div class="finding-main">
+          <div class="finding-title-line">
+            <span class="kind-badge {{ f.kind }}">{{ {'error':'chyba','warning':'varování','opportunity':'příležitost'}.get(f.kind,f.kind) }}</span>
+            {% if f.code in ai_actionable_codes %}<span class="automation-badge">Boban připraví opravu</span>{% else %}<span class="automation-badge soft">kontrola / doporučení</span>{% endif %}
+            <strong>{{ f.title }}</strong>
+            {% if knowledge_map.get(f.code) %}<a class="mini-info-link" href="{{ url_for('knowledge_article', project_id=project.id, slug=knowledge_map.get(f.code)) }}" title="Vysvětlit tento pojem">i</a>{% endif %}
+          </div>
+          <p>{{ f.detail }}</p>
+          <div class="finding-meta"><span>{{ f.count }} {{ 'obrázků' if f.code in ['missing_alt','image_alt_missing'] else 'URL' }}</span><span>{{ f.source }}</span><span>{{ f.category }}</span></div>
+        </div>
+        <div class="finding-actions"><a class="btn small-btn {{ 'primary' if f.code in ai_actionable_codes else '' }}" href="{{ url_for('seo_finding', project_id=project.id, code=f.code, source=f.source) }}">{{ 'Připravit řešení' if f.code in ai_actionable_codes else 'Zkontrolovat' }}</a></div>
+      </div>
+      {% else %}<div class="empty-inline">V tomto filtru nejsou žádné otevřené nálezy.</div>{% endfor %}
+    </div>
+  </section>
+
+  <aside class="right-stack seo-side-clean">
+    <section class="card side-card">
+      <div class="info-title"><span class="info-dot">i</span><strong>Proč už skoro nikde neuvidíš 100/100?</strong></div>
+      <p class="muted small">Protože 100 má znamenat skutečně velmi čistý stav a vysoké pokrytí auditu. Pokud projdu jen malý vzorek velkého webu, technické skóre záměrně nepustím ke stovce.</p>
+    </section>
+    <section class="card side-card">
+      <div class="info-title"><span class="info-dot">i</span><strong>Klíčová slova ≠ meta keywords</strong></div>
+      <p class="muted small">Neřeším zastaralý meta tag keywords. Řeším skutečné dotazy, téma stránky a to, zda title, H1, text, ALT a odkazy používají jazyk, kterému rozumí lidé i vyhledávače.</p>
+      <a class="text-link" href="{{ url_for('knowledge_article', project_id=project.id, slug='obsahove-seo') }}">Vysvětlit obsahové SEO →</a>
+    </section>
+    <section class="card side-card">
+      <div class="info-title"><span class="info-dot">i</span><strong>SEO poradna</strong></div>
+      <p class="muted small">Jak funguje Google, Seznam a Bing, co ovlivňuje crawl, indexaci, obsah a odkazy a kde končí jistota a začíná doporučení.</p>
+      <a class="btn small-btn" href="{{ url_for('knowledge', project_id=project.id) }}">Otevřít znalostní bázi</a>
+    </section>
+    <details class="card advanced-box"><summary>Pokročilé: ruční SEO změna</summary><form class="form compact-form" method="post" action="{{ url_for('action_new', project_id=project.id) }}"><label>WordPress ID<input name="post_id" value="{{ request.args.get('post_id','') }}" required></label><label>Cílová URL<input name="target_url" value="{{ request.args.get('target_url','') }}"></label><label>SEO title<input name="title"></label><label>Meta description<textarea name="description" rows="3"></textarea></label><label>Canonical<input name="canonical"></label><button class="btn wide">Uložit jako úkol</button></form></details>
+  </aside>
+</div>
+{% endblock %}

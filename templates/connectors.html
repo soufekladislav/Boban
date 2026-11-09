@@ -1,0 +1,222 @@
+{% extends "base.html" %}
+{% block title %}Konektory – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><h1>Konektory</h1><p class="lead-sm">Konektory jsou zdroje dat a akční kanály. U Google služeb nově ověřuji nejen oprávnění, ale i to, že vybraná property skutečně patří k tomuto webu.</p></div>
+</div>
+
+<div class="connector-grid">
+  <section class="card connector-card featured" id="fresh-core">
+    <div class="connector-top"><div class="connector-icon">FC</div><div><span class="eyebrow">WEB</span><h3>Fresh Core – čtení</h3></div><span class="badge {{ project.status }}">{{ 'Připojeno' if project.status=='connected' else 'Čeká' }}</span></div>
+    <p>Načítá strukturu WordPressu, SEO metadata a CMS kontext. Je to „oči“ Bobana uvnitř webu.</p>
+    <form method="post" action="{{ url_for('core_connect', project_id=project.id) }}" class="form compact-form">
+      <label>Connector Manifest URL<input name="core_manifest_url" value="{{ project.core_manifest_url or '' }}" placeholder="https://.../manifest.json" required></label>
+      <button class="btn primary">Připojit / synchronizovat</button>
+    </form>
+    {% if project.core_version %}<div class="connector-note">Core {{ project.core_version }} • poslední sync {{ project.core_last_sync }}</div>{% endif %}
+    <details class="connector-advanced" {{ 'open' if not commerce_read.authorized else '' }}>
+      <summary><b>Rozhraní Fresh Core – SEO · produkty · objednávky</b> <span class="badge {{ 'connected' if commerce_read.authorized else 'warning' }}">{{ 'REST čtení ověřeno' if commerce_read.authorized else 'REST čtení neověřeno' }}</span></summary>
+      <p>Manifest již slouží pro SEO a strukturu webu. Aktuální produkty a objednávky načítá stejný Fresh Core přes zabezpečené REST API. <b>Nejde o další WooCommerce konektor.</b> Pokud nebylo REST čtení dříve autorizováno, stačí jednou zadat stávající Access Key z Fresh Core (nikoliv Write nebo Accounting Key).</p>
+      <form class="form compact-form" method="post" action="{{ url_for('project_core_catalog_key',project_id=project.id) }}">
+        <label>{{ 'Obnovit přístup k REST čtení' if commerce_read.authorized else 'Jednorázově povolit REST čtení' }}<input type="password" name="read_key" minlength="32" autocomplete="off" required placeholder="Existující Fresh Core Access Key"></label>
+        <button class="btn">Ověřit čtecí oprávnění</button>
+      </form>
+      {% if commerce_read.authorized %}
+        <div class="connector-note">Poslední ověření: {{ commerce_read.checked_at or '—' }}</div>
+        <p><b>Produkty uložené v Bobanovi:</b> {{ commerce_read.cached_products }}{% if commerce_read.total is defined %} / {{ commerce_read.total }}{% endif %}. Synchronizace: {{ 'dokončeno' if commerce_read.finished_at else 'průběžně' }}.</p>
+        {% if commerce_read.last_error %}<div class="connector-note">Poslední chyba: {{ commerce_read.last_error }}</div>{% endif %}
+        <form method="post" action="{{ url_for('project_core_catalog_check',project_id=project.id) }}" class="actions compact">
+          <button class="btn primary" type="submit" {% if commerce_read.next_page == 0 %}name="reset" value="1"{% endif %}>{{ 'Pokračovat v načítání produktů' if commerce_read.next_page else 'Zkontrolovat data znovu' }}</button>
+          <button class="btn" type="submit" name="reset" value="1">Načíst od začátku</button>
+        </form>
+        <p class="muted small">Načítání po dávkách (max. 300 produktů na požadavek) chrání web před přetížením. Pokud je produkt variabilní, jeho varianty a EAN/GTIN zatím nejsou v přenosu úplné.</p>
+      {% endif %}
+    </details>
+  </section>
+
+  <section class="card connector-card">
+    <div class="connector-top"><div class="connector-icon">W</div><div><span class="eyebrow">AKCE</span><h3>Fresh Core – změny</h3></div><span class="badge {{ project.core_write_status or '' }}">{{ 'Ověřeno' if project.core_write_status=='connected' else 'Vypnuto' }}</span></div>
+    <p>Samostatný write bridge. Bez něj Web Booster nic na WordPressu měnit nemůže. Každá změna se zapisuje do historie.</p>
+    <form method="post" action="{{ url_for('core_write_connect', project_id=project.id) }}" class="form compact-form">
+      <label>REST base URL<input name="core_write_endpoint" value="{{ project.core_write_endpoint or (project.site_url ~ '/wp-json/fresh-core/v1') }}" required></label>
+      <label>Write key<input type="password" name="core_write_key" placeholder="Fresh Core → Write bridge key" required></label>
+      <button class="btn">Ověřit write bridge</button>
+    </form>
+  </section>
+
+  <section class="card connector-card featured-google">
+    {% set gsc = integration_map.get('search_console') %}
+    <div class="connector-top"><div class="connector-icon google">G</div><div><span class="eyebrow">GOOGLE SEARCH</span><h3>Google Search Console</h3></div>
+      {% if gsc and gsc_config.selected_property and gsc_config.domain_verified %}<span class="badge connected">Ověřeno</span>
+      {% elif gsc and gsc_config.selected_property %}<span class="badge warning">Ověřit doménu</span>
+      {% elif gsc %}<span class="badge warning">Vyber property</span>
+      {% else %}<span class="badge">Nepřipojeno</span>{% endif %}
+    </div>
+    <p>Dotazy, kliknutí, imprese, CTR, pozice a stav indexace. Po schválení umím spravovat sitemap přes Search Console API.</p>
+
+    {% if not google_oauth_ready %}
+      <div class="info-block"><div><b>Je potřeba nastavit Google OAuth</b><span>Doplň Client ID, Client Secret a callback URL do <code>.env</code>.</span></div></div>
+    {% elif not gsc %}
+      <a class="btn primary" href="{{ url_for('google_start', project_id=project.id, service='google_stack') }}">Připojit Google Search + Analytics + GTM</a>
+    {% else %}
+      {% if gsc_config.selected_property %}
+      <div class="connector-trust {{ 'ok' if gsc_config.domain_verified else 'warn' }}">
+        <b>{{ 'Doména ověřena' if gsc_config.domain_verified else 'Doména nesedí k projektu' }}</b>
+        <span>{{ gsc_config.selected_property }}</span>
+        <small>Oprávnění: {{ gsc_config.selected_permission or 'nezjištěno' }}</small>
+      </div>
+      {% endif %}
+      {% if gsc_config.available_properties %}
+      <details class="connector-advanced" {{ 'open' if not gsc_config.selected_property else '' }}>
+        <summary>{{ 'Vybrat property' if not gsc_config.selected_property else 'Změnit Search Console property' }}</summary>
+        <form method="post" action="{{ url_for('search_console_property', project_id=project.id) }}" class="form compact-form">
+          <label>Search Console property<select name="property" required>{% for x in gsc_config.available_properties %}<option value="{{ x.siteUrl }}" {{ 'selected' if x.siteUrl==gsc_config.selected_property }}>{{ x.siteUrl }} • {{ x.permissionLevel }}</option>{% endfor %}</select></label>
+          <button class="btn">Ověřit a uložit</button>
+        </form>
+      </details>
+      {% endif %}
+      <div class="connector-capabilities"><span>Čtení: <b>ano</b></span><span>Zápis: <b>{{ 'ano' if gsc_config.write_enabled else 'ne' }}</b></span></div>
+      <div class="actions compact"><a class="btn" href="{{ url_for('google_start', project_id=project.id, service='search_console') }}">Obnovit oprávnění</a>{% if gsc_config.selected_property %}<form method="post" action="{{ url_for('search_console_sync', project_id=project.id) }}"><button class="btn primary">Načíst výkon</button></form><a class="btn" href="{{ url_for('search_performance', project_id=project.id) }}">Viditelnost</a>{% endif %}</div>
+    {% endif %}
+  </section>
+
+  <section class="card connector-card featured-google">
+    {% set ga4 = integration_map.get('ga4') %}
+    <div class="connector-top"><div class="connector-icon google">A</div><div><span class="eyebrow">ANALYTIKA</span><h3>Google Analytics 4</h3></div>
+      {% if ga4 and ga4_config.selected_property and ga4_config.selected_domain_verified %}<span class="badge connected">Ověřeno</span>
+      {% elif ga4 and ga4_config.selected_property %}<span class="badge warning">Ověřit stream</span>
+      {% elif ga4 %}<span class="badge warning">Vyber property</span>
+      {% else %}<span class="badge">Nepřipojeno</span>{% endif %}
+    </div>
+    <p>Ukáže celkovou návštěvnost i zvlášť Organic Search. Property považuji za důvěryhodnou až po ověření web streamu proti doméně projektu.</p>
+
+    {% if not google_oauth_ready %}
+      <div class="info-block"><div><b>Je potřeba nastavit Google OAuth</b><span>Stejný Google projekt používá Search Console i GA4.</span></div></div>
+    {% elif not ga4 %}
+      <a class="btn primary" href="{{ url_for('google_start', project_id=project.id, service='google_stack') }}">Připojit Google Search + Analytics + GTM</a>
+    {% else %}
+      {% if ga4_config.selected_property %}
+      <div class="connector-trust {{ 'ok' if ga4_config.selected_domain_verified else 'warn' }}">
+        <b>{{ 'Web stream ověřen' if ga4_config.selected_domain_verified else 'Vybraná property není ověřena proti doméně' }}</b>
+        <span>{{ ga4_config.selected_verified_uri or ga4_config.selected_property }}</span>
+        {% if ga4_config.selected_measurement_ids %}<small>Measurement ID: {{ ga4_config.selected_measurement_ids|join(', ') }}</small>{% endif %}
+        {% if not ga4_config.selected_domain_verified and ga4_config.selected_stream_hosts %}<small>Nalezené streamy: {{ ga4_config.selected_stream_hosts|join(', ') }}</small>{% endif %}
+      </div>
+      {% endif %}
+      {% if ga4_config.available_properties %}
+      <details class="connector-advanced" {{ 'open' if not ga4_config.selected_property else '' }}>
+        <summary>{{ 'Vybrat GA4 property' if not ga4_config.selected_property else 'Změnit GA4 property' }}</summary>
+        <form method="post" action="{{ url_for('ga4_property', project_id=project.id) }}" class="form compact-form">
+          <label>GA4 property<select name="property" required>
+            {% for x in ga4_config.available_properties %}
+              <option value="{{ x.property }}" {{ 'selected' if x.property==ga4_config.selected_property }}>{{ '✓ ' if x.domainVerified else '' }}{{ x.displayName }} • {{ x.property }}{% if x.verifiedUri %} • {{ x.verifiedUri }}{% elif x.streamChecked and x.streamHosts %} • stream: {{ x.streamHosts|join(', ') }}{% endif %}{% if x.canEdit %} • lze měnit{% endif %}</option>
+            {% endfor %}
+          </select></label>
+          <button class="btn">Ověřit stream a uložit</button>
+        </form>
+      </details>
+      {% endif %}
+      <div class="connector-capabilities"><span>Čtení: <b>ano</b></span><span>Zápis konfigurace: <b>{{ 'ano' if ga4_config.write_enabled else 'ne' }}</b></span></div>
+      <div class="actions compact"><a class="btn" href="{{ url_for('google_start', project_id=project.id, service='ga4') }}">Obnovit oprávnění</a>{% if ga4_config.selected_property %}<form method="post" action="{{ url_for('ga4_sync', project_id=project.id) }}"><button class="btn primary">Načíst Analytics</button></form><a class="btn" href="{{ url_for('search_performance', project_id=project.id) }}">Výkon</a>{% endif %}</div>
+    {% endif %}
+  </section>
+
+  <section class="card connector-card">
+    <div class="connector-top"><div class="connector-icon">PS</div><div><span class="eyebrow">VÝKON WEBU</span><h3>PageSpeed + CrUX</h3></div>{% if performance %}<span class="badge connected">Načteno</span>{% elif pagespeed_ready %}<span class="badge warning">Připraveno</span>{% else %}<span class="badge">Chybí API key</span>{% endif %}</div>
+    <p>Lighthouse diagnostika a reálná Core Web Vitals data: LCP, INP a CLS. Boban je používá jako technický výkonový signál, ne jako náhradu Search Console.</p>
+    {% if pagespeed_ready %}<form method="post" action="{{ url_for('performance_sync', project_id=project.id) }}"><button class="btn primary">Načíst výkon</button></form>{% else %}<div class="connector-note">Do <code>.env</code> doplň <code>PAGESPEED_API_KEY</code> nebo <code>GOOGLE_API_KEY</code> a v Google Cloud povol PageSpeed Insights API + Chrome UX Report API.</div>{% endif %}
+    {% if performance %}<div class="connector-capabilities"><span>Mobile: <b>{{ performance.mobile.performance_score if performance.mobile else '—' }}/100</b></span>{% if performance.crux and performance.crux.available %}<span>LCP: <b>{{ performance.crux.lcp_ms|round|int }} ms</b></span><span>INP: <b>{{ performance.crux.inp_ms|round|int }} ms</b></span><span>CLS: <b>{{ performance.crux.cls|round(3) }}</b></span>{% else %}<span>CrUX: <b>bez dat</b></span>{% endif %}</div>{% endif %}
+  </section>
+
+  <section class="card connector-card">
+    {% set gtmrow = integration_map.get('gtm') %}
+    <div class="connector-top"><div class="connector-icon google">T</div><div><span class="eyebrow">MĚŘENÍ</span><h3>Google Tag Manager</h3></div>{% if gtmrow and gtm_config.selected_container %}<span class="badge connected">Read-only</span>{% elif gtmrow %}<span class="badge warning">Vyber kontejner</span>{% else %}<span class="badge">Nepřipojeno</span>{% endif %}</div>
+    <p>Boban čte tagy, triggery a proměnné a hledá mezery v měření obchodních konverzí. Verze 0.7.3 záměrně nic v GTM nezapisuje ani nepublikuje.</p>
+    {% if not google_oauth_ready %}<div class="connector-note">Nejdřív nastav Google OAuth.</div>{% elif not gtmrow %}<a class="btn primary" href="{{ url_for('google_start', project_id=project.id, service='gtm') }}">Připojit GTM read-only</a>{% else %}
+      {% if gtm_config.available_containers %}<details class="connector-advanced" {{ 'open' if not gtm_config.selected_container else '' }}><summary>{{ 'Vybrat GTM kontejner' if not gtm_config.selected_container else 'Změnit GTM kontejner' }}</summary><form method="post" action="{{ url_for('gtm_container', project_id=project.id) }}" class="form compact-form"><label>Kontejner<select name="container" required>{% for x in gtm_config.available_containers %}<option value="{{ x.path }}" {{ 'selected' if x.path==gtm_config.selected_container }}>{{ x.name }} • {{ x.publicId or x.path }} • {{ x.accountName }}</option>{% endfor %}</select></label><button class="btn">Uložit</button></form></details>{% endif %}
+      <div class="actions compact"><a class="btn" href="{{ url_for('google_start', project_id=project.id, service='gtm') }}">Obnovit oprávnění</a>{% if gtm_config.selected_container %}<form method="post" action="{{ url_for('gtm_sync', project_id=project.id) }}"><button class="btn primary">Spustit read-only audit</button></form>{% endif %}</div>
+      {% if gtm %}<div class="connector-capabilities"><span>Tagy: <b>{{ gtm.counts.tags or 0 }}</b></span><span>Triggery: <b>{{ gtm.counts.triggers or 0 }}</b></span><span>Proměnné: <b>{{ gtm.counts.variables or 0 }}</b></span></div>{% endif %}
+    {% endif %}
+  </section>
+
+<section class="card connector-card" id="merchant-center">
+  {% set mr=integration_map.get('merchant_center') %}
+  <div class="connector-top"><div class="connector-icon google">G</div><div><span class="eyebrow">E-COMMERCE · PŘIPOJENÍ</span><h3>Google Merchant Center</h3></div><span class="badge {{ 'connected' if merchant_config.selected_account else 'warning' }}">{{ 'Účet vybrán' if merchant_config.selected_account else 'Nepřipojeno' }}</span></div>
+  <p>Zde pouze připojíš Google, vybereš Merchant účet a obnovíš oprávnění. Export katalogu, synchronizaci a výsledky spravuje E-commerce.</p>
+  {% if not mr or not merchant_config.available_accounts %}
+    <a class="btn primary" href="{{ url_for('google_start',project_id=project.id,service='merchant_center') }}">Připojit Merchant přes Google</a>
+  {% else %}
+    <form method="post" action="{{ url_for('merchant_choose_account',project_id=project.id) }}" class="form compact-form"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <label>Merchant účet<select name="account" required>{% for a in merchant_config.available_accounts %}<option value="{{ a.name }}" {{ 'selected' if a.name==merchant_config.selected_account else '' }}>{{ a.label }} ({{ a.name }})</option>{% endfor %}</select></label>
+      <button class="btn">Vybrat účet</button>
+    </form>
+    <a class="btn" href="{{ url_for('google_start',project_id=project.id,service='merchant_center') }}">Obnovit oprávnění</a>
+    {% if merchant_config.selected_account %}
+      <div class="connector-trust ok"><b>Vybraný účet</b><span>{{ merchant_config.selected_account }}</span></div>
+    {% endif %}
+  {% endif %}
+  <p class="muted">Publikaci a výsledky najdeš v <a href="{{ url_for('ecommerce',project_id=project.id) }}#merchant-platform">E-commerce → Google Merchant Center</a>.</p>
+</section>
+<section class="card connector-card" id="zbozi-connector">
+  <div class="connector-top"><div class="connector-icon google">Z</div><div><span class="eyebrow">E-COMMERCE · PŘIPOJENÍ</span><h3>Zboží.cz / Seznam Nákupy</h3></div><span class="badge {{ 'connected' if zbozi_api_config.connected_at else 'warning' }}">{{ 'API připojeno' if zbozi_api_config.connected_at else 'Nepřipojeno' }}</span></div>
+  <p>Nové Sklik API Fénix. Nejprve ověříme a bezpečně uložíme klíč. Dostupnost provozovny a feedů kontrolujeme samostatně. Bez spuštění placené kampaně.</p>
+  {% if zbozi_api_config.connected_at %}
+    <div class="connector-trust ok"><b>Fénix API: ověřeno</b><span>Poslední ověření: {{ zbozi_api_config.last_checked_at or zbozi_api_config.connected_at }}</span></div>
+    {% if zbozi_api_config.feed_status == 'unavailable' %}
+      <p class="muted">API klíč je uložený. Zatím nelze načíst provozovnu/feedy (HTTP {{ zbozi_api_config.feed_http_status or '—' }}); dokonči nebo ověř jejich přístup v Seznam Nákupy.</p>
+    {% elif zbozi_api_config.feed_status == 'ok' %}
+      <p class="muted">Dostupné produktové feedy: {{ zbozi_api_config.feed_count if zbozi_api_config.feed_count is not none else '—' }}</p>
+    {% endif %}
+  {% endif %}
+  <form method="post" action="{{ url_for('zbozi_connector_save',project_id=project.id) }}" class="form compact-form">
+    <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+    <label>API klíč Fénix ze Skliku<input type="password" name="fenix_refresh_token" autocomplete="off" placeholder="Nový nebo obnovený API klíč" required></label>
+    <button class="btn primary" type="submit">{{ 'Ověřit a obnovit připojení' if zbozi_api_config.connected_at else 'Ověřit a připojit' }}</button>
+  </form>
+  <div class="commerce-controls"><a class="btn" href="https://www.sklik.cz/" target="_blank" rel="noopener noreferrer">Sklik</a><a class="btn" href="{{ url_for('ecommerce',project_id=project.id) }}#zbozi-platform">Feedy v E-commerce</a></div>
+</section>
+<section class="card connector-card" id="heureka-connector">
+  <div class="connector-top"><div class="connector-icon google">H</div><div><span class="eyebrow">E-COMMERCE · PŘIPOJENÍ</span><h3>Heureka.cz</h3></div><span class="badge {{ 'connected' if heureka_config.shop_registered else 'warning' }}">{{ 'Registrace potvrzena uživatelem' if heureka_config.shop_registered else 'Čeká na registraci' }}</span></div>
+  <p>Heureka načítá veřejné XML adresy sama. Zde potvrdíš registraci e-shopu a případně garantovanou expedici skladových kusů. Generování obou XML řídí E-commerce.</p>
+  <form method="post" action="{{ url_for('heureka_connector_save',project_id=project.id) }}" class="form compact-form">
+    <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+    <label><input type="checkbox" name="shop_registered" value="1" {{ 'checked' if heureka_config.shop_registered }}> Obchod jsem zaregistroval v administraci Heureky a předal URL produktového XML</label>
+    <label><input type="checkbox" name="fast_dispatch_confirmed" value="1" {{ 'checked' if heureka_config.fast_dispatch_confirmed }}> U položek s doloženým skladovým počtem garantuji expedici tak, aby doručení zákazníkovi nepřekročilo 2 dny od objednání</label>
+    <label>Ověřená doba expedice pro nabídky bez individuálního údaje (dny)
+      <input type="number" name="default_delivery_days" min="0" max="30" step="1" value="{{ heureka_config.default_delivery_days if heureka_config.default_delivery_days is not none else '' }}" placeholder="Nepotvrzeno – neuvádět">
+    </label>
+    <p class="muted">Vyplň pouze pokud uvedený počet dní do expedice skutečně platí pro celý exportovaný sortiment bez individuálního údaje. Není to doručení zákazníkovi. Pro rozdílné dodavatele používej produktově specifické hodnoty a nespolehlivý globální údaj nevyplňuj.</p>
+    <button class="btn">Uložit nastavení</button>
+  </form>
+  <div class="commerce-controls"><a class="btn" href="https://sluzby.heureka.cz/" rel="noopener noreferrer" target="_blank">Administrace Heureky</a><a class="btn" href="{{ url_for('ecommerce',project_id=project.id) }}#heureka-platform">Feedy a stav v E-commerce</a></div>
+  <p class="muted">Bez ověření skladových počtů a expedice Boban dostupnost neoznačí jako připravenou. Heureka nemá univerzální OAuth konektor jako Google.</p>
+</section>
+<section class="card connector-card" id="meta-connector">
+  <div class="connector-top"><div class="connector-icon google">M</div><div><span class="eyebrow">E-COMMERCE · PŘIPOJENÍ</span><h3>Facebook / Meta</h3></div><span class="badge {{ 'connected' if meta_config.api_token_cipher else 'warning' }}">{{ 'AUTORIZOVÁNO' if meta_config.api_token_cipher else 'NEPŘIPOJENO' }}</span></div>
+  <p>Jedno připojení Meta Graph API pro katalog. Vyber existující katalog Adrenaline Race. Publikaci a kontrolu importu řeší E-commerce; reklamy se nespouštějí.</p>
+  <div class="commerce-controls"><a class="btn primary" href="{{ url_for('meta_oauth_start',project_id=project.id) }}">{{ 'Znovu připojit Meta' if meta_config.api_token_cipher else 'Připojit Meta účet' }}</a><a class="btn" href="https://business.facebook.com/commerce/" target="_blank" rel="noopener noreferrer">Commerce Manager</a></div>
+  {% if meta_config.api_token_cipher %}
+  <form method="post" action="{{ url_for('meta_connector_save',project_id=project.id) }}" class="form compact-form">
+    <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+    <label>ID existujícího katalogu<input name="meta_catalog_id" inputmode="numeric" required value="{{ meta_config.catalog_id or '' }}" placeholder="Například 3776291162425201"></label>
+    <button class="btn">Ověřit katalog a najít zdroj</button>
+  </form>
+  {% if meta_config.catalog_id %}<p class="muted">Vybraný katalog: {{ meta_config.catalog_id }}. {{ 'Existující zdroj přiřazen: '+meta_config.api_feed_id if meta_config.api_feed_id else 'Zdroj zatím nevybrán' }}</p>{% endif %}
+  {% endif %}
+  <p class="muted">Pro přihlášení je nutné nakonfigurovat META_APP_ID, META_APP_SECRET a v Meta aplikaci povolit callback <code>https://webbooster.freshcrackers.cz/connectors/meta/callback</code>. Oprávnění catalog_management a business_management podléhají pravidlům Meta.</p>
+  <div class="commerce-controls"><a class="btn" href="{{ url_for('ecommerce',project_id=project.id) }}#meta-platform">Správa katalogu v E-commerce</a></div>
+</section>
+</div>
+
+<details class="connector-roadmap"><summary>Další připravované integrace – rozbalit plán</summary>
+<div class="section-head"><div><span class="eyebrow">PLÁN KONEKTORŮ</span><h2>Co budeme připojovat dál</h2><p>Search Console nepotřebuje Analytics ani Tag Manager k samotnému připojení. Tyto služby přidají další vrstvy měření a konverzí.</p></div></div>
+<div class="connector-catalog">
+  {% for c in connector_catalog if c.id not in ['fresh_core','search_console','ga4','gtm','pagespeed_crux','merchant_center'] %}
+  <div class="card catalog-card">
+    <div class="row"><div><span class="catalog-group">{{ c.group }}</span><h3>{{ c.name }}</h3></div><span class="badge {{ c.status }}">{{ 'Připraveno později' if c.status=='planned' else c.status }}</span></div>
+    <p>{{ c.purpose }}</p><div class="connector-note"><b>Co bude potřeba:</b> {{ c.needs }}</div>
+  </div>
+  {% endfor %}
+</div>
+</details>
+{% endblock %}

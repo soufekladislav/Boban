@@ -1,0 +1,9 @@
+{% extends "base.html" %}
+{% block title %}Odložené nálezy – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><a class="back" href="{{ url_for('seo', project_id=project.id) }}">← SEO audit</a><h1>Odložené a skryté nálezy</h1><p class="lead-sm">Tyto body dál eviduji, ale crawler je nevrací do hlavního přehledu. Odložené se po 30 dnech znovu aktivují; skryté jen tehdy, když je obnovíš.</p></div></div>
+<form method="post" action="{{ url_for('seo_issue_state', project_id=project.id) }}" class="card table-card" id="hidden-issues-form">
+  <div class="panel-head"><strong>{{ issues|length }} položek</strong><div class="selection-actions"><label class="select-all"><input type="checkbox" class="js-select-all" data-select-all="#hidden-issues-form"> Vybrat vše</label><button class="btn" name="issue_action" value="restore">Obnovit vybrané</button></div></div>
+  <div class="issue-table">{% for i in issues %}<div class="issue-table-row"><div><input class="js-row-check" type="checkbox" name="issue_ids" value="{{ i.id }}"></div><div><b>{{ i.title }}</b><div class="muted small">{{ i.target_url or 'Bez URL' }} · {{ 'odloženo do ' ~ i.snoozed_until if i.status=='snoozed' else 'skryto' }}</div></div><span class="badge {{ i.status }}">{{ i.status }}</span></div>{% else %}<div class="empty-inline">Nic tu není.</div>{% endfor %}</div>
+</form>
+{% endblock %}

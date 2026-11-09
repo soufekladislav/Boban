@@ -1,0 +1,28 @@
+{% extends "base.html" %}
+{% block title %}Co Boban řeší – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head boban-page-head">
+  <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><span class="eyebrow">BOBAN BEZ SLOVNÍKU</span><h1>Co Boban řeší a proč</h1><p class="lead-sm">SEO ani PPC nemusíš znát. Tahle stránka vysvětluje, co Boban kontroluje, proč to má smysl a kam kliknout, když chceš konkrétní věc opravit.</p></div>
+  <img class="boban-page-avatar" src="{{ boban_image_url }}" alt="Boban">
+</div>
+
+<div class="explain-grid">
+  <section class="card explain-card"><span class="explain-num">01</span><h2>Technické SEO</h2><p>Kontroluje, zda se stránky vůbec správně načítají a zda je vyhledávač může projít. Sem patří HTTP chyby, přesměrování, canonical nebo robots.</p><div class="plain-language"><b>Normálně řečeno:</b> Je web technicky čitelný a neposílá Google na slepé uličky?</div><a class="text-link" href="{{ url_for('seo', project_id=project.id, category='technical') }}">Otevřít technické problémy →</a></section>
+  <section class="card explain-card"><span class="explain-num">02</span><h2>Indexace</h2><p>Hlídá, které stránky mají být ve vyhledávači a které naopak ne. Noindex nebo špatný canonical mohou důležitou stránku schovat.</p><div class="plain-language"><b>Normálně řečeno:</b> Ví Google, kterou stránku má ukázat?</div><a class="text-link" href="{{ url_for('seo', project_id=project.id, category='indexing') }}">Otevřít indexaci →</a></section>
+  <section class="card explain-card"><span class="explain-num">03</span><h2>Title a meta description</h2><p>Title je název výsledku ve vyhledávání. Meta description je popis pod ním. Boban je umí kontrolovat a u podporovaných problémů navrhnout jednotlivě i hromadně.</p><div class="plain-language"><b>Normálně řečeno:</b> Vypadá výsledek v Googlu tak, aby na něj člověk chtěl kliknout?</div><a class="text-link" href="{{ url_for('seo', project_id=project.id, category='metadata') }}">Otevřít metadata →</a></section>
+  <section class="card explain-card"><span class="explain-num">04</span><h2>Obsah</h2><p>Hledá příliš krátké stránky, chybějící hlavní nadpisy, duplicity a později i témata, na která web získává imprese, ale neodpovídá na ně dost dobře.</p><div class="plain-language"><b>Normálně řečeno:</b> Odpovídá stránka dobře na to, co člověk hledá?</div><a class="text-link" href="{{ url_for('seo', project_id=project.id, category='content') }}">Otevřít obsah →</a></section>
+  <section class="card explain-card"><span class="explain-num">05</span><h2>Odkazy a struktura</h2><p>Boban bude hlídat interní odkazy, orphan pages a cestu uživatele mezi souvisejícími stránkami. To pomáhá lidem i robotům najít důležitý obsah.</p><div class="plain-language"><b>Normálně řečeno:</b> Dostane se návštěvník i Google tam, kam potřebujeme?</div><a class="text-link" href="{{ url_for('seo', project_id=project.id, category='links') }}">Otevřít odkazy →</a></section>
+  <section class="card explain-card"><span class="explain-num">06</span><h2>Obrázky</h2><p>Kontroluje ALT texty a později i velikost, formát a zbytečně těžké soubory. ALT pomáhá přístupnosti a vyhledávání obrázků.</p><div class="plain-language"><b>Normálně řečeno:</b> Chápe vyhledávač, co je na obrázku, a nestahuje zbytečně obří soubor?</div><a class="text-link" href="{{ url_for('seo', project_id=project.id, category='images') }}">Otevřít obrázky →</a></section>
+  <section class="card explain-card"><span class="explain-num">07</span><h2>Jak funguje vyhledávání</h2><p>Google, Seznam a Bing mají vlastní systémy, ale základ je podobný: stránku musí objevit, načíst, pochopit a teprve potom ji mohou nabídnout na konkrétní dotaz.</p><div class="plain-language"><b>Normálně řečeno:</b> Nechci po tobě slepou víru v SEO poučky. U každého nálezu umím vysvětlit, proč ho řeším.</div><a class="text-link" href="{{ url_for('knowledge', project_id=project.id) }}">Otevřít SEO poradnu →</a></section>
+</div>
+
+<section class="card measurement-section">
+  <div><span class="eyebrow">MĚŘENÍ DOPADU</span><h2>Nejen „opraveno“, ale „pomohlo to?“</h2><p>Po připojení Search Console ukládáme kliknutí, imprese, CTR a pozice. Při změně si Web Booster zapamatuje výchozí stav a po dalších synchronizacích ukáže rozdíl.</p></div>
+  {% if gsc and gsc.current %}<div class="measurement-kpis"><div><span>Kliknutí</span><b>{{ gsc.current.clicks|round|int }}</b></div><div><span>Imprese</span><b>{{ gsc.current.impressions|round|int }}</b></div><div><span>CTR</span><b>{{ (gsc.current.ctr*100)|round(1) }} %</b></div></div>{% else %}<a class="btn primary" href="{{ url_for('connectors', project_id=project.id) }}">Připojit Search Console</a>{% endif %}
+</section>
+
+<section class="ppc-explain">
+  <div><span class="eyebrow light">DALŠÍ KANÁL</span><h2>PPC = placená návštěvnost</h2><p>PPC není náhrada SEO. Boban ji později použije tam, kde dává smysl platit za okamžitou návštěvnost – a bude porovnávat náklady, konverze a ROAS se stejným principem měření dopadu.</p></div>
+  <div class="ppc-flow"><span>Plán kampaně</span><b>→</b><span>Schválení</span><b>→</b><span>Rozpočet</span><b>→</b><span>Konverze</span><b>→</b><span>Dopad</span></div>
+</section>
+{% endblock %}

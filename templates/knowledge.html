@@ -1,0 +1,30 @@
+{% extends "base.html" %}
+{% block title %}SEO poradna – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a>
+    <h1>SEO poradna</h1>
+    <p class="lead-sm">Nechci, abys jen slepě klikal na opravy. Tady vysvětluji, jak vyhledávání funguje, co skutečně umíme ovlivnit a co naopak nikdo seriózně slíbit neumí.</p>
+  </div>
+</div>
+
+<div class="info-block wide-info"><div><b>Jak pracuji se zdroji</b><span>U věcí, které popisují Google, Bing nebo Seznam veřejně, odkazuji na jejich oficiální dokumentaci. Interní ranking váhy veřejné nejsou – proto je nevymýšlím a odděluji fakta od doporučení.</span></div></div>
+
+<form method="get" class="card" style="padding:14px;margin:0 0 18px;display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+  <label for="knowledge-search">Hledat v SEO knihovně</label>
+  <input id="knowledge-search" name="q" value="{{ q or '' }}" placeholder="Např. indexace, katalog, title…" style="flex:1;min-width:200px">
+  <button class="btn" type="submit">Hledat</button>
+  {% if q %}<a class="btn" href="{{ url_for('knowledge',project_id=project.id) }}">Zrušit filtr</a>{% endif %}
+</form>
+<div class="knowledge-grid">
+  {% for a in articles %}
+  <a class="card knowledge-card" href="{{ url_for('knowledge_article', project_id=project.id, slug=a.slug) }}">
+    <span class="eyebrow">{{ a.category }}{% if a.scope %} · {{ a.scope }}{% endif %}</span>
+    <h2>{{ a.title }}</h2>
+    <p>{{ a.summary }}</p>
+    <span class="knowledge-more">Vysvětlit →</span>
+  </a>
+  {% endfor %}
+</div>
+{% endblock %}

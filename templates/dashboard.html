@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Weby – Web Booster{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <span class="eyebrow">PŘEHLED</span>
+    <h1>Tvoje weby</h1>
+    <p class="lead-sm">Na jednom místě vidíš kritické SEO skóre, rozsah auditu, počet nalezených bodů a stav propojení.</p>
+  </div>
+  {% if current_user.can_edit %}<a class="btn primary" href="{{ url_for('project_new') }}">+ Přidat web</a>{% endif %}
+</div>
+{% if current_user.is_visitor %}
+<div class="card access-callout">
+  <div><span class="eyebrow">VISITOR</span><h3>Chceš s Bobanem aktivně pracovat?</h3><p>Visitor může prohlížet nasdílené projekty. Editor bude placený účet pro vlastní projekty, chat, přípravu úkolů a aktivní práci Bobana.</p></div>
+  {% if access_request and access_request.status == 'pending' %}<span class="badge warning">Žádost čeká na vyřízení</span>{% else %}<form method="post" action="{{ url_for('request_editor_access') }}"><input type="hidden" name="note" value="Žádost z nástěnky"><button class="btn primary">Požádat o Editor přístup</button></form>{% endif %}
+</div>
+{% endif %}
+{% if fresh_key_requests %}
+<div class="card access-callout">
+  <div><span class="eyebrow">FRESH KEY</span><h3>Návrhy na vytvoření propojeného projektu</h3><p>Projekt v Bobanovi vznikne až po tvém potvrzení. Boban potřebuje také veřejnou HTTPS URL webu.</p></div>
+  <div style="width:100%">{% for req in fresh_key_requests %}{% if not req.target_external_project_id %}<div style="padding:12px 0;border-top:1px solid var(--line)"><strong>{{ req.target_project_name or req.link_name }}</strong><div class="muted small">{{ req.requester.display_name or req.requester.email }} navrhuje nový Boban projekt propojený s {{ req.link_name }}.</div><form method="post" action="{{ url_for('fresh_key_link_request_create', request_id=req.id) }}" style="display:flex;gap:8px;align-items:end;flex-wrap:wrap;margin-top:8px"><label style="flex:1;min-width:200px">Název<input name="name" value="{{ req.target_project_name or req.link_name }}" required></label><label style="flex:1;min-width:220px">HTTPS URL<input name="site_url" value="{{ req.requested_project_url or '' }}" placeholder="https://…" required></label><button class="btn primary" type="submit">Potvrdit a vytvořit</button></form><form method="post" action="{{ url_for('fresh_key_link_request_decline') }}" style="margin-top:6px"><input type="hidden" name="request_id" value="{{ req.id }}"><input type="hidden" name="back" value="dashboard"><button class="btn secondary" type="submit">Odmítnout</button></form></div>{% endif %}{% endfor %}</div>
+</div>
+{% endif %}
+{% if projects %}
+<div class="grid projects">
+  {% for p in projects %}
+  <a class="card project-card" href="{{ url_for('project', project_id=p.id) }}">
+    <div class="row">
+      <div><strong class="project-name">{{ p.name }}</strong><div class="muted url">{{ p.site_url }}</div></div>
+      <div class="project-card-badges"><span class="badge {{ p.status }}">{{ 'Připojeno' if p.status=='connected' else 'Čeká na Core' }}</span><span class="badge neutral">{{ p.access_role|upper }}</span></div>
+    </div>
+    <div class="mini-kpis">
+      <div><span>SEO připravenost</span><b>{{ p.health_score }}/100</b></div>
+      <div><span>SEO URL</span><b>{{ p.seo_url_count or 0 }}</b></div>
+      <div><span>Otevřené body</span><b>{{ p.open_issue_count or 0 }}</b></div>
+    </div>
+    <div class="card-foot"><span>Otevřít web</span><span>→</span></div>
+  </a>
+  {% endfor %}
+</div>
+{% else %}
+<div class="empty card empty-hero">
+  <div class="empty-icon">↗</div>
+  {% if current_user.can_edit %}<h2>Přidej první web</h2><p>Stačí URL webu a Connector Manifest URL z Fresh Core. Boban si načte strukturu webu a připraví první audit.</p><a class="btn primary" href="{{ url_for('project_new') }}">Přidat web</a>{% else %}<h2>Zatím nemáš nasdílený projekt</h2><p>Jakmile ti vlastník nasdílí projekt, objeví se tady. Pro vlastní web požádej o Editor přístup.</p>{% endif %}
+</div>
+{% endif %}
+{% endblock %}

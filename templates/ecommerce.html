@@ -1,0 +1,252 @@
+{% extends "base.html" %}
+{% block title %}E-commerce – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><a class="back" href="{{ url_for('project',project_id=project.id) }}">← {{ project.name }}</a><h1>E-commerce</h1><p class="lead-sm">Jeden produktový katalog. Vlastní výběr sortimentu. Ověřené exporty. Přenos a údržba probíhají automaticky.</p></div></div>
+<div class="commerce-workspace">
+  <section class="card commerce-panel" data-catalog-monitor data-status-url="{{ url_for('ecommerce_status',project_id=project.id) }}">
+    <div class="commerce-heading"><div><span class="eyebrow">KROK 1 · ZDROJ DAT</span><h2>Katalog z Fresh Core</h2></div><span class="badge {{ 'connected' if ecommerce.catalog.authorized else 'warning' }}">{{ 'Připojeno' if ecommerce.catalog.authorized else 'Chybí přístup' }}</span></div>
+    <p>WooCommerce je zdrojem dat. Boban si ukládá pracovní kopii produktů a bezpečně kontroluje její aktuálnost. Není potřeba spouštět jednotlivé dávky.</p>
+    <div class="commerce-stats"><div><small>Načtené produkty</small><strong data-catalog-products>{{ ecommerce.products }}</strong><span data-catalog-products-total>ze {{ ecommerce.catalog.total or '—' }}</span></div><div><small>Načtené varianty</small><strong data-catalog-variants>{{ ecommerce.variants }}</strong><span data-catalog-variants-total>ze {{ ecommerce.variants_state.total if ecommerce.variants_state else '—' }}</span></div></div>
+    {% set running=workflow.mode in ['running','active'] %}
+    <div class="catalog-status">
+      <strong data-catalog-state>Stav: {{ {'idle':'Čeká na spuštění','running':'Probíhá načítání a zpracování','active':'Automatická správa aktivní','paused':'Pozastaveno','review':'Připraveno ke kontrole'}.get(workflow.mode,workflow.mode) }}</strong>
+      {% if workflow.last_error %}<p class="commerce-warning">{{ workflow.last_error }}</p>{% endif %}
+      {% if ecommerce.catalog.total %}<div class="catalog-progress" role="progressbar" aria-label="Průběh synchronizace" aria-valuemin="0" aria-valuemax="100" aria-valuenow="{{ (100*(ecommerce.products + ecommerce.variants)/((ecommerce.catalog.total or 0) + ((ecommerce.variants_state.total if ecommerce.variants_state else 0) or 0)))|round(1) if ((ecommerce.catalog.total or 0) + ((ecommerce.variants_state.total if ecommerce.variants_state else 0) or 0)) else 0 }}" data-catalog-progress><span style="width:{{ (100*(ecommerce.products + ecommerce.variants)/((ecommerce.catalog.total or 0) + ((ecommerce.variants_state.total if ecommerce.variants_state else 0) or 0)))|round(1) if ((ecommerce.catalog.total or 0) + ((ecommerce.variants_state.total if ecommerce.variants_state else 0) or 0)) else 0 }}%"></span></div>{% endif %}
+      <div class="catalog-live-details" aria-live="polite"><strong data-catalog-percent>Aktualizuji stav…</strong><span data-catalog-batch>Poslední dávka: —</span><span data-catalog-worker>Plánovač: zjišťuji stav…</span><span data-catalog-update>Stav načítám automaticky.</span><span data-catalog-error hidden></span></div>
+      <small>Plánovač zpracuje jednu krátkou skupinu požadavků při každém běhu. Po chybě uloží bod pokračování a čeká na zásah. Pro automatický chod musí běžet cron. Bez něj použij ruční spuštění jedné dávky a zkontroluj diagnostiku.</small>
+    </div>
+    <div class="commerce-controls">
+      {% if not running %}<form method="post" action="{{ url_for('ecommerce_workflow_update',project_id=project.id) }}"><input type="hidden" name="action" value="start"><button class="btn primary" {{ 'disabled' if not ecommerce.catalog.authorized }}>▶ Spustit / pokračovat</button></form>{% else %}<form method="post" action="{{ url_for('ecommerce_workflow_update',project_id=project.id) }}"><input type="hidden" name="action" value="pause"><button class="btn">⏸ Pozastavit</button></form><form method="post" action="{{ url_for('ecommerce_workflow_update',project_id=project.id) }}"><input type="hidden" name="action" value="run_once"><button class="btn">↻ Spustit dávku nyní</button></form>{% endif %}
+      <details class="commerce-details"><summary>Nová fronta od začátku</summary><p class="muted">Znovu načte všechny produkty i varianty. Zachová pravidla výběru a poslední zveřejněný XML feed. Použij jen při potřebě úplného opakování.</p><form method="post" action="{{ url_for('ecommerce_workflow_update',project_id=project.id) }}" onsubmit="return confirm('Opravdu založit novou frontu a znovu načíst celý katalog?')"><input type="hidden" name="action" value="restart"><input type="hidden" name="confirm" value="RESTART"><button class="btn">Založit novou frontu</button></form></details>
+    </div>
+    <details class="commerce-details"><summary>Jak funguje automatické pokračování?</summary><p>Po spuštění fronty Boban ihned požádá o provedení první dávky. Další dávky navazují automaticky jen tehdy, pokud je na serveru nastavený plánovač <code>python manage.py catalog-sync</code> každou minutu. Stav <b>Probíhá</b> bez nových produktů sám o sobě neznamená, že se zpracovává.</p></details>
+    <details class="commerce-details"><summary>Technické informace a bezpečnost</summary><p>Načítáme krátké stránky s omezením času a zámkem proti souběhu. Při přerušení se navazuje na poslední dokončenou stránku. Při opakovaném načtení se obnovují ceny, sklad a popisy. Publikované XML se nemění, dokud nová verze neprojde validací.</p><p class="muted">Stránka produktů: {{ ecommerce.catalog.next_page or 'dokončeno' }} · Stránka variant: {{ ecommerce.variants_state.next_page if ecommerce.variants_state else 'nezahájeno' }} · Poslední kontrola: {{ ecommerce.catalog.checked_at or '—' }}</p><p>Plná synchronizace je periodická. Okamžité změnové události z WooCommerce jsou připravené pro další integraci; zatím nejsou součástí tohoto balíčku.</p></details>
+  </section>
+  <section class="card commerce-panel">
+    <div class="commerce-heading"><div><span class="eyebrow">KROK 2 · SCHVALOVÁNÍ</span><h2>Finální výběr sortimentu</h2></div><span class="badge {{ 'connected' if workflow.approved else 'warning' }}">{{ 'Schváleno' if workflow.approved else 'Návrh' }}</span></div>
+    <p>Vyřaď nejprve kategorie a potom jednotlivé produkty. Výjimky zůstávají uložené i po další synchronizaci. Produkt v jakékoliv vyloučené kategorii se neexportuje.</p>
+    <div class="commerce-stats"><div><small>Zahrnuté hlavní produkty</small><strong>{{ selection_preview.parents }}</strong><span>{{ selection_preview.excluded_parents }} vyřazeno</span></div><div><small>Zahrnuté varianty</small><strong>{{ selection_preview.variants }}</strong><span>{{ selection_preview.excluded_variants }} vyřazeno</span></div></div>
+    <form method="post" action="{{ url_for('ecommerce_workflow_update',project_id=project.id) }}"><input type="hidden" name="action" value="approve"><button class="btn primary" {{ 'disabled' if not (ecommerce.catalog.next_page==0 and ecommerce.catalog.finished_at and ecommerce.variants_state and ecommerce.variants_state.next_page==0 and ecommerce.variants_state.finished_at) }}>Schválit sortiment a připravit export</button></form>
+    <p class="muted">Schválení vyžaduje kompletní načtení. Po úpravě výběru se automaticky vrátí stav „Návrh“; starý veřejný XML soubor zůstane zachovaný.</p>
+    <details class="commerce-details"><summary>Interval obnovy</summary><form method="post" class="commerce-controls" action="{{ url_for('ecommerce_workflow_update',project_id=project.id) }}"><input type="hidden" name="action" value="interval"><label>Kontrola produktových dat <select name="minutes">{% for m,label in [(15,'15 minut'),(30,'30 minut'),(60,'1 hodina'),(180,'3 hodiny'),(360,'6 hodin'),(720,'12 hodin'),(1440,'24 hodin')] %}<option value="{{ m }}" {{ 'selected' if workflow.interval_minutes==m }}>{{ label }}</option>{% endfor %}</select></label><button class="btn">Uložit</button></form></details>
+  </section>
+</div>
+<div class="catalog-selection-grid" id="catalog-selection">
+<section class="card commerce-next catalog-selector-panel"><div class="commerce-heading"><div><span class="eyebrow">VÝBĚR · KATEGORIE</span><h2>Výběr kategorií</h2></div><span class="badge">{{ category_rows|length }} kategorií</span></div><p>Kliknutím vyloučíš kategorii, jejímž obsahem nejsou produkty určené pro katalogy (např. eventy a služby). Podkategorie se vyloučí společně s nadřazenou kategorií. Při publikaci Boban ověří úplný strom kategorií z WooCommerce, bez opakovaného načítání produktů.</p>
+  {% if category_rows %}<div class="catalog-category-list catalog-scroll">{% for c in category_rows %}<form method="post" action="{{ url_for('ecommerce_exclusion_update',project_id=project.id) }}" class="catalog-category-row"><input type="hidden" name="kind" value="category"><input type="hidden" name="id" value="{{ c.id }}"><button type="submit" class="catalog-toggle {{ 'is-excluded' if c.id in inherited_excluded_categories else '' }}" aria-label="Změnit zařazení kategorie">{{ 'Vyloučeno' if c.id in excluded_categories else ('Děděné vyloučení' if c.id in inherited_excluded_categories else 'Zahrnuto') }}</button><span class="catalog-category-title" style="--category-depth:{{ c.depth }}">{% if c.depth %}<span class="muted" aria-hidden="true">↳ </span>{% endif %}{{ c.name }}</span><small>{{ c.count }} produktů</small></form>{% endfor %}</div>{% else %}<p class="muted">Kategorie se zobrazí po načtení produktů. Pokud chybí úplný strom, zkontrolujeme jeho předávání z Fresh Core.</p>{% endif %}
+</section>
+<section class="card commerce-next catalog-selector-panel"><div class="commerce-heading"><div><span class="eyebrow">VÝBĚR · PRODUKTY A VARIANTY</span><h2>Jednotlivé produkty</h2></div><span class="badge">{{ product_visible_total }} položek z povolených kategorií</span></div>
+  <form method="get" action="{{ url_for('ecommerce',project_id=project.id) }}" class="catalog-search"><input type="search" name="q" value="{{ product_query }}" placeholder="Hledat název, SKU nebo ID"><button class="btn">Hledat</button></form>
+  {% if product_rows %}<div class="catalog-products catalog-scroll">{% for p in product_rows %}<form method="post" class="catalog-product-row" action="{{ url_for('ecommerce_exclusion_update',project_id=project.id) }}"><input type="hidden" name="kind" value="product"><input type="hidden" name="id" value="{{ p.selector_id }}"><input type="hidden" name="q" value="{{ product_query }}"><input type="hidden" name="page" value="{{ product_page }}"><div><strong>{{ p.title or 'Bez názvu' }}</strong><small>{{ p.selector_kind|capitalize }} · ID {{ p.selector_id }} · SKU {{ p.sku or '—' }} · {{ p.price or '—' }} {{ p.currency or '' }}{% if p.price in ['0.01','0.010','0.0100'] %} · <span class="commerce-warning">Cena vyžaduje ověření – do XML nepůjde</span>{% endif %}</small></div><button class="catalog-toggle {{ 'is-excluded' if p.selector_id in excluded_products else '' }}">{{ 'Vyloučeno' if p.selector_id in excluded_products else 'Zahrnuto' }}</button></form>{% endfor %}</div>{% else %}<p class="muted">Žádné načtené produkty neodpovídají filtru.</p>{% endif %}
+  <div class="commerce-controls">{% if product_page>1 %}<a class="btn" href="{{ url_for('ecommerce',project_id=project.id,q=product_query,page=product_page-1) }}#catalog-selection">Předchozí</a>{% endif %}<span>Strana {{ product_page }} z {{ product_pages }}</span>{% if product_page<product_pages %}<a class="btn" href="{{ url_for('ecommerce',project_id=project.id,q=product_query,page=product_page+1) }}#catalog-selection">Další</a>{% endif %}</div>
+</section>
+</div>
+<div class="commerce-step-heading" id="merchant-platform"><span class="eyebrow">KROK 3 · PUBLIKACE A VÝSLEDKY</span><h2>Prodejní platformy</h2><p class="muted">Stejný schválený výběr sortimentu používáme pro Google Merchant i Heureku.</p></div>
+<div class="commerce-platform-grid">
+  <section class="card commerce-panel" aria-label="Ovládání Google Merchant">
+    <div class="commerce-heading"><div><span class="eyebrow">GOOGLE MERCHANT · OVLÁDÁNÍ</span><h2>Publikace a synchronizace</h2></div><span class="badge {{ 'connected' if merchant_snapshot.selected_account else 'warning' }}">{{ 'Připojeno' if merchant_snapshot.selected_account else 'Nepřipojeno' }}</span></div>
+    <p>Schválený katalog → Google XML → načtení Merchantem. Připojení účtu se spravuje výhradně v Konektorech.</p>
+    <div class="commerce-platform-meta"><span>Merchant účet</span><strong>{{ merchant_snapshot.selected_account or 'Účet zatím není vybrán' }}</strong></div>
+    <div class="commerce-platform-meta"><span>Feed v Bobanovi</span><strong>{{ 'Publikováno' if ecommerce.feed else 'Zatím nepublikováno' }}</strong></div>
+    {% if ecommerce.feed %}<div class="commerce-export-result"><small>Publikováno: {{ ecommerce.feed.generated_at }}</small><div class="commerce-stats"><div><small>V XML</small><strong>{{ ecommerce.feed.exported_count }}</strong></div><div><small>Vyřazeno validací</small><strong>{{ ecommerce.feed.omitted_count }}</strong></div></div><label>Veřejná adresa XML<input readonly aria-label="Adresa Google XML" onclick="this.select()" value="{{ url_for('catalog_google_public',token=ecommerce.feed.feed_token,_external=True) }}"></label></div>{% else %}<p class="commerce-warning">Nejdříve načti katalog, schval sortiment a publikuj XML.</p>{% endif %}
+    {% if workflow.approved %}<form method="post" action="{{ url_for('ecommerce_google_build',project_id=project.id) }}" onsubmit="return confirm('Znovu sestavit a publikovat Google XML ze schváleného katalogu?')"><button class="btn">Znovu publikovat schválené XML</button></form>{% endif %}
+    {% if export_report.category_tree_source %}<p class="muted">Ověření: {{ export_report.category_count }} kategorií ({{ export_report.category_tree_source }}); vyloučení platí i pro varianty.</p>{% endif %}
+    {% if export_report.errors or export_report.warnings %}<details class="commerce-details"><summary>Kontrola chyb a upozornění</summary>{% for item in (export_report.errors or [])[:20] %}<p>{{ item.id }}: {{ item.problems|join(', ') }}</p>{% endfor %}{% for item in (export_report.warnings or [])[:10] %}<p>{{ item.id }}: {{ item.problem }}</p>{% endfor %}</details>{% endif %}
+    <details class="commerce-details"><summary>Co se exportuje?</summary><p>Produkty a varianty včetně ceny, dostupnosti, fotografií a katalogových atributů. Vyloučené a nevalidní nabídky se do XML neposílají.</p></details>
+    {% if not merchant_snapshot.selected_account %}<a class="btn primary" href="{{ url_for('connectors',project_id=project.id) }}#merchant-center">Připojit Merchant účet</a>
+    {% elif not ecommerce.feed %}<p class="muted">Připojení účtu je připraveno; publikuj nejdříve schválený XML feed v tomto kroku.</p>
+    {% elif not merchant_snapshot.data_source %}
+      <form method="post" action="{{ url_for('merchant_publish_feed',project_id=project.id) }}" onsubmit="return confirm('Připojit publikovaný XML feed k vybranému Merchant účtu?')"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn primary">Připojit XML ke Googlu</button></form>
+    {% else %}
+      <div class="commerce-platform-meta"><span>Datový zdroj</span><strong>{{ merchant_snapshot.data_source }}</strong></div>
+      <div class="commerce-controls">
+        <form method="post" action="{{ url_for('merchant_fetch_now',project_id=project.id) }}" onsubmit="return confirm('Požádat Google o načtení aktuálně publikovaného XML?')"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn primary">Načíst aktuální XML Googlem</button></form>
+      </div>
+      <small class="muted">Poslední požadavek na načtení: {{ merchant_snapshot.fetch_requested_at or '—' }}. Nezměněný XML soubor má ochrannou lhůtu.</small>
+    {% endif %}
+    {% if merchant_snapshot.selected_account %}<div class="commerce-controls"><a class="btn" href="https://merchants.google.com/" target="_blank" rel="noopener noreferrer">Nastavení obchodu v Google Merchant</a><a class="btn" href="{{ url_for('connectors',project_id=project.id) }}#merchant-center">Správa připojení</a></div>{% endif %}
+  </section>
+  <section class="card commerce-panel" aria-label="Výsledky Google Merchant">
+    <div class="commerce-heading"><div><span class="eyebrow">GOOGLE MERCHANT · VÝSLEDKY</span><h2>Stav a statistiky</h2></div><span class="badge {{ 'connected' if merchant_snapshot.upload and merchant_snapshot.upload.processingState == 'SUCCEEDED' else 'warning' }}">{{ 'Zpracováno' if merchant_snapshot.upload and merchant_snapshot.upload.processingState == 'SUCCEEDED' else ('Zpracovává se' if merchant_snapshot.upload and merchant_snapshot.upload.processingState == 'IN_PROGRESS' else 'Čeká na kontrolu') }}</span></div>
+    <div class="commerce-tabs" role="tablist" aria-label="Přehled Merchant">
+      <button class="commerce-tab is-active" type="button" role="tab" aria-selected="true" aria-controls="merchant-pane-import" id="merchant-tab-import" data-merchant-tab="import">Import</button>
+      <button class="commerce-tab" type="button" role="tab" aria-selected="false" aria-controls="merchant-pane-account" id="merchant-tab-account" data-merchant-tab="account">Obchod</button>
+      <button class="commerce-tab" type="button" role="tab" aria-selected="false" aria-controls="merchant-pane-performance" id="merchant-tab-performance" data-merchant-tab="performance">Výkon</button>
+    </div>
+    <div id="merchant-pane-import" role="tabpanel" aria-labelledby="merchant-tab-import" data-merchant-pane="import">
+      {% if merchant_snapshot.upload %}
+        <div class="commerce-stats"><div><small>Zpracováno Googlem</small><strong>{{ merchant_snapshot.upload.itemsTotal if merchant_snapshot.upload.itemsTotal is defined else '—' }}</strong></div><div><small>Nově vytvořeno</small><strong>{{ merchant_snapshot.upload.itemsCreated if merchant_snapshot.upload.itemsCreated is defined else '—' }}</strong></div><div><small>Aktualizováno</small><strong>{{ merchant_snapshot.upload.itemsUpdated if merchant_snapshot.upload.itemsUpdated is defined else '—' }}</strong></div><div><small>Stav importu</small><strong class="commerce-value-label">{{ {'SUCCEEDED':'Dokončeno','IN_PROGRESS':'Probíhá','FAILED':'Selhalo'}.get(merchant_snapshot.upload.processingState,merchant_snapshot.upload.processingState or 'Neznámý') }}</strong></div></div>
+        <p class="muted">Poslední zpracování: {{ merchant_snapshot.upload.uploadTime or '—' }}. Zpracování neznamená schválení všech nabídek.</p>
+        <details class="commerce-details"><summary>Technické podrobnosti z Google</summary><pre class="commerce-json">{{ merchant_snapshot.upload|tojson(indent=2) }}</pre></details>
+      {% else %}<p class="muted">Zatím není načtený výsledek posledního importu. Po spuštění jej zkontroluj tlačítkem níže.</p>{% endif %}
+      {% if merchant_snapshot.upload_error %}<p class="commerce-warning">{{ merchant_snapshot.upload_error }}</p>{% endif %}
+      {% if merchant_snapshot.aggregate %}<details class="commerce-details"><summary>Diagnostika produktů ({{ merchant_snapshot.aggregate|length }})</summary>{% for item in merchant_snapshot.aggregate %}<div class="commerce-platform-meta"><span>{{ item.reportingContext }} · {{ item.country }}</span><strong>{{ item.stats|tojson }} · problémů: {{ (item.itemLevelIssues or [])|length }}</strong></div>{% endfor %}</details>{% endif %}
+    </div>
+    <div id="merchant-pane-account" role="tabpanel" aria-labelledby="merchant-tab-account" data-merchant-pane="account" hidden>
+      <div class="commerce-platform-meta"><span>Účet</span><strong>{{ merchant_snapshot.selected_account or 'Nepřipojeno' }}</strong></div>
+      <div class="commerce-platform-meta"><span>Zdroj dat</span><strong>{{ merchant_snapshot.data_source or 'Není připojen' }}</strong></div>
+      <div class="commerce-platform-meta"><span>Poslední kontrola</span><strong>{{ merchant_snapshot.checked_at or '—' }}</strong></div>
+      <p class="muted">Firemní údaje, doprava a vrácení zboží se nyní upravují přímo v Merchant Center. Automatický audit těchto nastavení ještě není implementován.</p>
+      <a class="btn" href="https://merchants.google.com/" rel="noopener noreferrer" target="_blank">Otevřít Merchant Center</a>
+    </div>
+    <div id="merchant-pane-performance" role="tabpanel" aria-labelledby="merchant-tab-performance" data-merchant-pane="performance" hidden>
+      {% if merchant_snapshot.report %}
+        <div class="commerce-stats"><div><small>Prokliky za 28 dní</small><strong>{{ merchant_snapshot.report.clicks }}</strong></div><div><small>Zobrazení nabídek</small><strong>{{ merchant_snapshot.report.impressions }}</strong></div><div><small>CTR</small><strong>{{ merchant_snapshot.report.ctr_percent }} %</strong></div></div>
+        <p class="muted">Výkon neplacených záznamů: {{ merchant_snapshot.report.period_start }} – {{ merchant_snapshot.report.period_end }}. Objednávky a tržby zatím nejsou v tomto přehledu propojené.</p>
+        {% if merchant_snapshot.report.daily %}<details class="commerce-details"><summary>Denní vývoj</summary><div class="commerce-scroll-table"><table><thead><tr><th>Datum</th><th>Prokliky</th><th>Zobrazení</th></tr></thead><tbody>{% for d in merchant_snapshot.report.daily %}<tr><td>{{ d.date.year }}-{{ d.date.month }}-{{ d.date.day }}</td><td>{{ d.clicks or 0 }}</td><td>{{ d.impressions or 0 }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+      {% else %}<p class="muted">Výkonnostní data zatím nejsou načtená. Po připojení účtu je získáš tlačítkem níže.</p>{% endif %}
+    </div>
+    {% if merchant_snapshot.selected_account %}<div class="commerce-controls"><form method="post" action="{{ url_for('merchant_check',project_id=project.id) }}"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn">Načíst stav Google</button></form><form method="post" action="{{ url_for('merchant_performance',project_id=project.id) }}"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn">Aktualizovat výkon za 28 dní</button></form></div>{% endif %}
+  </section>
+</div>
+<div class="commerce-step-heading" id="heureka-platform"><span class="eyebrow">KROK 3 · HEUREKA.CZ</span><h2>Heureka – produktový a dostupnostní feed</h2><p class="muted">Automaticky sestavované XML z již schváleného sortimentu. Bez dalšího importu z WooCommerce.</p></div>
+<div class="commerce-platform-grid">
+  <section class="card commerce-panel" aria-label="Heureka ovládání">
+    <div class="commerce-heading"><div><span class="eyebrow">HEUREKA · OVLÁDÁNÍ</span><h2>Publikace a synchronizace</h2></div><span class="badge {{ 'connected' if heureka_config.generated_at else 'warning' }}">{{ 'XML připraveno' if heureka_config.generated_at else 'Čeká na export' }}</span></div>
+    <p>Produktové XML a dostupnostní XML vytváří Boban. Registraci e-shopu a vložení adresy XML dokončíš jednou v administraci Heureky.</p>
+    {% if heureka_config.generated_at %}
+      <div class="commerce-export-result"><small>Publikováno: {{ heureka_config.generated_at }}</small>
+        <div class="commerce-stats"><div><small>Produktové položky</small><strong>{{ heureka_config.exported_count }}</strong></div><div><small>Ověřená dostupnost</small><strong>{{ heureka_config.availability_count }}</strong></div></div>
+        <label>Produktové XML<input readonly aria-label="URL Heureka produktové XML" onclick="this.select()" value="{{ url_for('catalog_heureka_public',token=heureka_config.feed_token,_external=True) }}"></label>
+        {% if heureka_config.fast_dispatch_confirmed and heureka_config.availability_count %}
+          <label>Dostupnostní XML (jen pro PPC režim)<input readonly aria-label="URL Heureka dostupnostní XML" onclick="this.select()" value="{{ url_for('catalog_heureka_availability_public',token=heureka_config.feed_token,_external=True) }}"></label>
+        {% else %}<p class="commerce-warning">Dostupnostní feed zatím nelze použít: chybí ověřená rychlost expedice nebo spolehlivý počet skladových kusů. Produktový XML feed můžeš využít samostatně.</p>{% endif %}
+      </div>
+    {% else %}<p class="muted">Po schválení katalogu vytvoř první XML. Další aktualizace budou navazovat na automatickou synchronizaci Bobana.</p>{% endif %}
+    <form method="post" action="{{ url_for('ecommerce_heureka_build',project_id=project.id) }}"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn primary" {{ 'disabled' if not workflow.approved }}>{{ 'Znovu připravit XML' if heureka_config.generated_at else 'Připravit oba feedy' }}</button></form>
+    <div class="commerce-controls"><a class="btn" href="{{ url_for('connectors',project_id=project.id) }}#heureka-connector">Nastavení připojení</a><a class="btn" href="https://sluzby.heureka.cz/" target="_blank" rel="noopener noreferrer">Administrace Heureky</a></div>
+  </section>
+  <section class="card commerce-panel" aria-label="Heureka výsledky">
+    <div class="commerce-heading"><div><span class="eyebrow">HEUREKA · VÝSLEDKY</span><h2>Stav a diagnostika</h2></div><span class="badge">{{ 'URL předána Heurece' if heureka_config.shop_registered else 'Zatím bez potvrzení' }}</span></div>
+    {% if heureka_config.last_error %}<p class="commerce-warning">Poslední automatická obnova Heureky: {{ heureka_config.last_error }}</p>{% endif %}
+    {% if heureka_config.generated_at %}
+      <div class="commerce-stats"><div><small>Publikováno v XML</small><strong>{{ heureka_config.exported_count }}</strong></div><div><small>Skladové položky</small><strong>{{ heureka_config.availability_count }}</strong></div></div>
+      <div class="commerce-platform-meta"><span>Poslední vytvoření XML</span><strong>{{ heureka_config.generated_at }}</strong></div>
+    {% else %}<p class="muted">Zatím není publikované Heureka XML.</p>{% endif %}
+    <p class="muted">Boban ověřuje strukturu a dostupnost souborů. Skutečné schválení obchodu, spárování produktů, prokliky a objednávky musí potvrdit Heureka; nemáme je nyní přes API propojené.</p>
+    {% if heureka_config.report %}<details class="commerce-details"><summary>Kontrola chyb a upozornění</summary>{% for item in (heureka_config.report.errors or [])[:15] %}<p>{{ item.id }}: {{ item.problems|join(', ') }}</p>{% endfor %}{% for item in (heureka_config.report.warnings or [])[:15] %}<p>{{ item.id }}: {{ item.problem }}</p>{% endfor %}</details>{% endif %}
+    <a class="btn" href="https://sluzby.heureka.cz/napoveda/dostupnostni-feed/" target="_blank" rel="noopener noreferrer">Pravidla dostupnostního XML</a>
+  </section>
+</div>
+<div class="commerce-step-heading" id="zbozi-platform"><span class="eyebrow">KROK 3 · ZBOŽÍ.CZ</span><h2>Seznam Nákupy – produktový katalog</h2><p class="muted">Samostatný XML výstup z již schváleného katalogu. Zboží.cz používá vlastní specifikaci a API Fénix.</p></div>
+<div class="commerce-platform-grid">
+  <section class="card commerce-panel" aria-label="Zboží.cz ovládání">
+    <div class="commerce-heading"><div><span class="eyebrow">ZBOŽÍ.CZ · OVLÁDÁNÍ</span><h2>Publikace a synchronizace</h2></div><span class="badge {{ 'connected' if zbozi_config.generated_at else 'warning' }}">{{ 'XML připraveno' if zbozi_config.generated_at else 'Čeká na export' }}</span></div>
+    <p>Boban připraví XML z již schválené sady. URL je stabilní pro každé opakované generování. Provozovnu a zdroj dat nastavíš v Seznamu.</p>
+    {% if zbozi_config.generated_at %}
+    <div class="commerce-export-result"><small>Publikováno: {{ zbozi_config.generated_at }}</small>
+    <div class="commerce-stats"><div><small>Platné nabídky</small><strong>{{ zbozi_config.exported_count }}</strong></div></div>
+    <label>Produktové XML<input readonly onclick="this.select()" aria-label="URL Zboží.cz XML" value="{{ url_for('catalog_zbozi_public',token=zbozi_config.feed_token,_external=True) }}"></label></div>
+    {% else %}<p class="muted">Nejdříve připrav XML. Katalog z WooCommerce se znovu nenačítá.</p>{% endif %}
+    <form method="post" action="{{ url_for('ecommerce_zbozi_build',project_id=project.id) }}"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn primary" {{ 'disabled' if not workflow.approved }}>{{ 'Znovu připravit XML' if zbozi_config.generated_at else 'Připravit XML' }}</button></form>
+    <details class="commerce-details"><summary>Ověřená doprava pro Zboží.cz</summary>
+      <p class="muted">Vyplň jen způsob dopravy, který opravdu nabízíš pro <strong>všechny</strong> produkty tohoto feedu včetně rozměrných položek. Pokud se podmínky liší, nech pole prázdná a nastav dopravu v Centru prodejce po ověření provozovny. Nedoplňujeme žádné fiktivní sazby.</p>
+      {% set shipping = (zbozi_config.shipping_rules or [{}])[0] %}
+      <form method="post" action="{{ url_for('ecommerce_zbozi_shipping',project_id=project.id) }}">
+        <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+        <label>Dopravce pro celý sortiment
+          <select name="zbozi_delivery_id">
+            <option value="">Nezadávat dopravu do XML</option>
+            {% for key,label in [('ZASILKOVNA','Zásilkovna – výdejní místa'),('CESKA_POSTA_BALIKOVNA','Balíkovna'),('DPD','DPD na adresu'),('DPD_PICKUP','DPD Pickup'),('PPL','PPL na adresu'),('PPL_PARCELSHOP','PPL ParcelShop'),('GLS','GLS na adresu'),('GLS_PARCELSHOP','GLS Parcelshop'),('CESKA_POSTA','Česká pošta'),('BALIKOVNA_NA_ADRESU','Balíkovna na adresu'),('TOPTRANS','TOPTRANS'),('VLASTNI_PREPRAVA','Vlastní přeprava po celé ČR')] %}
+            <option value="{{ key }}" {{ 'selected' if shipping.id == key else '' }}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </label>
+        <label>Cena dopravy s DPH při platbě předem (Kč)
+          <input type="text" name="zbozi_delivery_price" placeholder="Např. 79,00" value="{{ shipping.price or '' }}">
+        </label>
+        <label>Cena při dobírce (nepovinné, Kč)
+          <input type="text" name="zbozi_delivery_cod" placeholder="Nevyplňuj, pokud není dobírka" value="{{ shipping.cod_price or '' }}">
+        </label>
+        <label><input type="checkbox" name="zbozi_shipping_confirm" value="yes"> Potvrzuji, že tato doprava a cena platí pro všechny exportované produkty.</label>
+        <button class="btn" type="submit">Uložit ověřenou dopravu</button>
+      </form>
+    </details>
+    <div class="commerce-controls"><a class="btn" href="{{ url_for('connectors',project_id=project.id) }}#zbozi-connector">Připojení API</a><a class="btn" href="https://www.sklik.cz/" target="_blank" rel="noopener noreferrer">Administrace Seznamu</a></div>
+  </section>
+  <section class="card commerce-panel" aria-label="Zboží.cz výsledky">
+    <div class="commerce-heading"><div><span class="eyebrow">ZBOŽÍ.CZ · VÝSLEDKY</span><h2>Stav a diagnostika</h2></div><span class="badge {{ 'connected' if zbozi_api_config.connected_at else 'warning' }}">{{ 'Fénix připojeno' if zbozi_api_config.connected_at else 'API nepřipojeno' }}</span></div>
+    {% if zbozi_config.last_error %}<p class="commerce-warning">Poslední automatická obnova: {{ zbozi_config.last_error }}</p>{% endif %}
+    {% if zbozi_config.generated_at %}<div class="commerce-stats"><div><small>Ve feedu</small><strong>{{ zbozi_config.exported_count }}</strong></div><div><small>Poslední aktualizace</small><strong>{{ zbozi_config.generated_at }}</strong></div></div>{% endif %}
+    {% if zbozi_config.report %}
+      <p class="muted">Zboží.cz: {{ zbozi_config.report.unmapped_category_count or 0 }} nezařazených podle oficiálního stromu · {{ zbozi_config.report.missing_shipping_count or 0 }} bez potvrzené dopravy v XML · {{ zbozi_config.report.duplicate_title_count or 0 }} duplicitních názvů vyřazeno.</p>
+    {% endif %}
+    {% if zbozi_config.report %}<details class="commerce-details"><summary>Kontrola exportu</summary>{% for item in (zbozi_config.report.errors or [])[:15] %}<p>{{ item.id }}: {{ item.problems|join(', ') }}</p>{% endfor %}{% for item in (zbozi_config.report.warnings or [])[:15] %}<p>{{ item.id }}: {{ item.problem }}</p>{% endfor %}</details>{% endif %}
+    <p class="muted">Boban potvrzuje stav vlastního XML, nikoli schválení Seznamem. API kontrola zobrazí potvrzení spojení; statistiky začnou až po skutečném zpracování nabídek.</p>
+    {% if zbozi_api_config.connected_at %}<form method="post" action="{{ url_for('ecommerce_zbozi_check',project_id=project.id) }}"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn">Ověřit API Fénix</button></form>{% if zbozi_api_config.last_checked_at %}<p class="muted">Poslední kontrola: {{ zbozi_api_config.last_checked_at }}</p>{% endif %}{% endif %}
+  </section>
+</div>
+<div class="commerce-step-heading" id="meta-platform"><span class="eyebrow">KROK 3 · FACEBOOK / META</span><h2>Meta – produktový katalog</h2><p class="muted">Jeden schválený sortiment, samostatné Meta RSS XML. Pro Facebook a Instagram bez dalšího importu z WooCommerce.</p></div>
+<div class="commerce-platform-grid">
+  <section class="card commerce-panel" aria-label="Meta ovládání">
+    <div class="commerce-heading"><div><span class="eyebrow">META · OVLÁDÁNÍ</span><h2>Publikace a synchronizace</h2></div><span class="badge {{ 'connected' if meta_config.generated_at else 'warning' }}">{{ 'XML připraveno' if meta_config.generated_at else 'Čeká na export' }}</span></div>
+    <p>Boban vytváří schválený Meta feed. Po autorizaci umí spustit nahrání do existujícího Meta zdroje a sledovat zpracování přes Graph API. Pixel a reklamy se zde nepřepisují.</p>
+    {% if meta_config.generated_at %}<div class="commerce-export-result"><small>Publikováno: {{ meta_config.generated_at }}</small><div class="commerce-stats"><div><small>Platné nabídky</small><strong>{{ meta_config.exported_count }}</strong></div><div><small>Varianty</small><strong>{{ meta_config.report.variant_count if meta_config.report else '—' }}</strong></div></div><label>Veřejná adresa Meta XML<input readonly onclick="this.select()" aria-label="URL Meta XML" value="{{ url_for('catalog_meta_public',token=meta_config.feed_token,_external=True) }}"></label></div>{% else %}<p class="muted">Schval společný katalog a připrav Meta XML. Nepotřebujeme znovu načítat WooCommerce.</p>{% endif %}
+    <form method="post" action="{{ url_for('ecommerce_meta_build',project_id=project.id) }}"><input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}"><button class="btn primary" {{ 'disabled' if not workflow.approved }}>{{ 'Znovu připravit Meta XML' if meta_config.generated_at else 'Připravit Meta XML' }}</button></form>
+    <div class="commerce-controls"><a class="btn" href="https://business.facebook.com/commerce/" target="_blank" rel="noopener noreferrer">Otevřít Meta Commerce Manager</a><a class="btn" href="{{ url_for('connectors',project_id=project.id) }}#meta-connector">Meta připojení</a></div>
+  </section>
+  <section class="card commerce-panel" aria-label="Meta výsledky">
+    <div class="commerce-heading"><div><span class="eyebrow">META · VÝSLEDKY</span><h2>Stav a diagnostika</h2></div><span class="badge {{ 'connected' if meta_config.api_feed_id else 'warning' }}">{{ 'Zdroj API vybrán' if meta_config.api_feed_id else 'API import neověřen' }}</span></div>
+    {% if meta_config.generated_at %}<div class="commerce-stats"><div><small>Ve feedu</small><strong>{{ meta_config.exported_count }}</strong></div><div><small>Vyřazeno</small><strong>{{ meta_config.report.omitted if meta_config.report else '—' }}</strong></div></div>{% endif %}
+    {% if meta_config.catalog_id %}<div class="commerce-platform-meta"><span>Katalog Meta</span><strong>{{ meta_config.catalog_id }}</strong></div>{% endif %}
+    {% if meta_config.api_token_cipher and meta_config.catalog_id %}
+    <form method="post" action="{{ url_for('ecommerce_meta_api',project_id=project.id) }}" class="form compact-form">
+      <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <input type="hidden" name="meta_action" value="status">
+      <button class="btn">Načíst stav přes Meta API</button>
+    </form>
+    {% if meta_config.api_feed_id %}
+    <form method="post" action="{{ url_for('ecommerce_meta_api',project_id=project.id) }}" class="form compact-form">
+      <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <input type="hidden" name="meta_action" value="upload">
+      <button class="btn primary" {{ 'disabled' if not meta_config.generated_at }}>Odeslat aktuální XML přes Meta API</button>
+    </form>
+    {% else %}
+    <p class="muted">Boban nyní nevytváří další zdroj. Vyber již existující datový zdroj ve stejném Meta katalogu.</p>
+    {% endif %}
+    {% if meta_config.api_last_result %}
+      <details class="commerce-details"><summary>Poslední odpověď Meta API</summary><pre style="white-space:pre-wrap;overflow-wrap:anywhere">{{ meta_config.api_last_result }}</pre></details>
+    {% endif %}
+    {% else %}<p class="muted">Připoj Meta účet přes Konektory, aby Boban mohl spouštět načítání a kontrolovat skutečný stav.</p>{% endif %}
+    {% if meta_config.api_token_cipher and meta_config.catalog_id and not meta_config.api_feed_id and meta_config.api_result and meta_config.api_result.feeds %}
+    <form method="post" action="{{ url_for('ecommerce_meta_api',project_id=project.id) }}" class="form compact-form">
+      <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <input type="hidden" name="meta_action" value="bind">
+      <label>Existující datový zdroj katalogu<select name="meta_feed_id" required>{% for f in meta_config.api_result.feeds %}<option value="{{ f.id }}">{{ f.name or 'Zdroj' }} ({{ f.id }})</option>{% endfor %}</select></label>
+      <button class="btn">Vybrat zdroj</button>
+    </form>
+    {% endif %}
+    {% if meta_config.api_token_cipher and meta_config.catalog_id and not meta_config.api_feed_id and not (meta_config.api_result and meta_config.api_result.feeds) %}
+    <form method="post" action="{{ url_for('ecommerce_meta_api',project_id=project.id) }}" class="form compact-form">
+      <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <input type="hidden" name="meta_action" value="bind">
+      <label>ID existujícího zdroje z Meta Commerce Manageru<input name="meta_feed_id" inputmode="numeric" placeholder="ID datového zdroje" required></label>
+      <button class="btn">Přiřadit existující zdroj</button>
+    </form>
+    {% endif %}
+    {% if meta_config.last_error %}<p class="commerce-warning">Automatická obnova: {{ meta_config.last_error }}</p>{% endif %}
+    {% if meta_config.report and (meta_config.report.errors or meta_config.report.warnings) %}<details class="commerce-details"><summary>Kontrola XML</summary>{% for issue in (meta_config.report.errors or [])[:15] %}<p>{{ issue.id }}: {{ issue.problems|join(', ') }}</p>{% endfor %}{% for issue in (meta_config.report.warnings or [])[:10] %}<p>{{ issue.id }}: {{ issue.problem }}</p>{% endfor %}</details>{% endif %}
+    <p class="muted">Odeslání přes API zahájí načtení stávajícího souboru; schválení produktů kontroluj podle skutečné odpovědi Meta a v Commerce Manageru. Žádná nová reklama se nevytváří.</p>
+  </section>
+</div>
+<script>
+(function(){
+  const root=document.querySelector('#merchant-platform');
+  if(!root)return;
+  const grid=root.nextElementSibling;
+  if(!grid)return;
+  const buttons=Array.from(grid.querySelectorAll('[data-merchant-tab]'));
+  const panels=Array.from(grid.querySelectorAll('[data-merchant-pane]'));
+  function selectTab(button){
+    const key=button.getAttribute('data-merchant-tab');
+    buttons.forEach(b=>{const active=b===button;b.classList.toggle('is-active',active);b.setAttribute('aria-selected',String(active));b.tabIndex=active?0:-1;});
+    panels.forEach(p=>{p.hidden=p.getAttribute('data-merchant-pane')!==key;});
+  }
+  buttons.forEach((b,index)=>{
+    b.addEventListener('click',()=>selectTab(b));
+    b.addEventListener('keydown',e=>{if(e.key==='ArrowRight'||e.key==='ArrowLeft'){e.preventDefault();const next=buttons[(index+(e.key==='ArrowRight'?1:buttons.length-1))%buttons.length];selectTab(next);next.focus();}});
+  });
+})();
+</script>
+<section class="card commerce-next"><span class="eyebrow">DALŠÍ ADAPTÉRY / BUDOUCÍ VIKI</span><h2>Další rozšiřování katalogů</h2><p>Google, Heureka, Zboží.cz i Meta používají společný schválený katalog. Po ověření výstupů se celý modul později přesune do Viki.</p></section>
+{% endblock %}

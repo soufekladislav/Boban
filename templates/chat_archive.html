@@ -1,0 +1,8 @@
+{% extends "base.html" %}
+{% block title %}Archiv chatu · {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head"><div><a class="back" href="{{ url_for('project',project_id=project.id) }}#boban-chat">← Zpět k Bobanovi</a><h1>{{ thread.title }}</h1><p class="muted">Archiv konverzace · pouze pro čtení</p></div></div>
+<section class="card archive-chat-messages">
+{% for m in messages %}<div class="message-wrap {{ 'user' if m.role=='user' else 'assistant' }}"><div class="bubble {{ 'user' if m.role=='user' else 'assistant' }}" {% if m.role!='user' %}data-rich-chat{% endif %}>{{ m.body }}</div><time class="chat-message-time" datetime="{{ m.created_at }}" data-chat-created-at="{{ m.created_at }}">{{ m.created_at }}</time></div>{% else %}<p class="muted">V této konverzaci nejsou žádné zprávy.</p>{% endfor %}
+</section>
+{% endblock %}

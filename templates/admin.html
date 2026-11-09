@@ -1,0 +1,147 @@
+{% extends "base.html" %}
+{% block title %}Admin console – Web Booster{% endblock %}
+{% block content %}
+<div class="page-head admin-head"><div><span class="eyebrow">ADMIN CONSOLE</span><h1>Řízení Web Boosteru</h1><p class="lead-sm">Účty, výkon aplikace, diagnostika, pravidelná aktivita Bobana a systémové služby.</p></div><span class="badge connected">ADMIN · {{ current_user.email }}</span></div>
+
+<div class="admin-kpis mobile-carousel" data-mobile-carousel>
+  <div class="card metric-card emphasis"><span>Účty</span><strong>{{ stats.users }}</strong><small>{{ stats.roles.get('editor',0) }} editorů · {{ stats.roles.get('visitor',0) }} visitorů</small></div>
+  <div class="card metric-card"><span>Projekty</span><strong>{{ stats.projects }}</strong><small>všechny weby v aplikaci</small></div>
+  <div class="card metric-card"><span>Worker</span><strong>{{ 'OK' if stats.worker.healthy else 'STOP' }}</strong><small>{{ stats.worker.status }}</small></div>
+  <div class="card metric-card"><span>AI běhy / 24 h</span><strong>{{ stats.engine.runs|int }}</strong><small>{{ stats.engine.errors|int }} chyb</small></div>
+  <div class="card metric-card"><span>AI latency</span><strong>{{ (stats.engine.avg_latency/1000)|round(1) }} s</strong><small>průměr za 24 h</small></div>
+  <div class="card metric-card"><span>AI náklad / 24 h</span><strong>${{ stats.engine.cost|round(3) }}</strong><small>podle dostupných run metadat</small></div>
+</div>
+
+{% if stats.requests %}
+<section class="card admin-card admin-alert" id="requests"><div class="panel-head"><div><span class="eyebrow">ŽÁDOSTI</span><h2>Editor přístup čeká na schválení</h2></div><span class="badge warning">{{ stats.requests|length }}</span></div>
+  {% for r in stats.requests %}<div class="request-row"><div><strong>{{ r.name }}</strong><span>{{ r.email }}</span>{% if r.note %}<small>{{ r.note }}</small>{% endif %}</div><div class="request-actions"><form method="post" action="{{ url_for('admin_access_request_decide', request_id=r.id, decision='approve') }}"><button class="btn primary">Schválit Editor</button></form><form method="post" action="{{ url_for('admin_access_request_decide', request_id=r.id, decision='reject') }}"><button class="btn">Zamítnout</button></form></div></div>{% endfor %}
+</section>
+{% endif %}
+
+<section class="card admin-card" id="merchant-developer">
+  <div class="panel-head"><div><span class="eyebrow">SYSTÉMOVÉ INTEGRACE</span><h2>Google Merchant API · registrace WebBoosteru</h2>
+  <p class="muted">Jednorázové propojení Google Cloud projektu WebBooster s registračním Merchant účtem. Platí pro celý Cloud projekt, nikoli pro jediného zákazníka. Přístup zákazníků se samostatně schvaluje v Konektorech.</p></div>
+  <span class="badge {{ 'connected' if merchant_developer_registration.registration_name else 'warning' }}">{{ 'Registrováno' if merchant_developer_registration.registration_name else 'Čeká na registraci' }}</span></div>
+  {% if merchant_developer_registration.registration_name %}
+  <div class="connector-trust ok"><b>WebBooster je registrován u Google Merchant API</b>
+  <span>Registrační Merchant ID: {{ merchant_developer_registration.merchant_id }}</span>
+  <span>Cloud projekt: {{ (merchant_developer_registration.gcp_ids or [])|join(', ') }}</span>
+  <span>Technický kontakt: {{ merchant_developer_registration.developer_email }}</span>
+  <small>Potvrzeno: {{ merchant_developer_registration.registered_at or '—' }}. Toto je výsledek posledního úspěšného registračního volání, nikoliv průběžný test oprávnění zákazníků.</small></div>
+  <p class="muted">Další Merchant účty se připojují v Konektorech příslušného projektu. Registraci už neopakuj; pro změnu registračního účtu je nutné řízené odregistrování.</p>
+  {% elif not google_oauth_ready %}
+  <p class="muted">Nejdříve nastav GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET a GOOGLE_REDIRECT_URI v prostředí aplikace.</p>
+  {% else %}
+  <details class="connector-advanced"><summary>Registrovat WebBooster · jednorázové nastavení</summary>
+  <form class="form" method="post" action="{{ url_for('admin_merchant_register_start') }}">
+   <input type="hidden" name="csrf_token" value="{{ merchant_registration_csrf }}">
+   <label>Firemní Merchant ID<input type="text" name="merchant_id" inputmode="numeric" pattern="[0-9]+" placeholder="Např. 778399976" required></label>
+   <label>Technický kontaktní Google e-mail<input type="email" name="developer_email" placeholder="technicky-kontakt@firma.cz" required></label>
+   <p class="muted">Použij produkční Merchant účet s ověřeným webem, ke kterému má přihlášený Google uživatel přímou roli Administrátor. Google propojí tento Cloud projekt právě s jedním registračním Merchant účtem. Účet si ověř před potvrzením.</p>
+   <label class="check-field"><input type="checkbox" name="confirm" value="yes" required> Potvrzuji správnost účtu a přímé administrátorské oprávnění.</label>
+   <button class="btn primary" type="submit">Přihlásit Google a registrovat WebBooster</button>
+  </form></details>
+  {% endif %}
+</section>
+
+<section class="card admin-card" id="assistant-communication"><div class="panel-head"><div><span class="eyebrow">VIRTUÁLNÍ ZAMĚSTNANEC</span><h2>Boban · komunikace</h2><p class="muted">Pravidla chatu. Nemění oprávnění, schvalovací workflow ani bezpečnostní pravidla.</p></div></div>
+<form class="form admin-chat-settings" method="post" action="{{ url_for('admin_assistant_communication') }}">
+<label>Tón<select name="tone"><option value="friendly" {{ 'selected' if chat_settings.tone=='friendly' }}>Přátelský a přirozený</option><option value="professional" {{ 'selected' if chat_settings.tone=='professional' }}>Věcný a profesionální</option><option value="energetic" {{ 'selected' if chat_settings.tone=='energetic' }}>Živý a motivující</option></select></label>
+<label>Oslovení<select name="address"><option value="informal" {{ 'selected' if chat_settings.address=='informal' }}>Tykání</option><option value="formal" {{ 'selected' if chat_settings.address=='formal' }}>Vykání</option></select></label>
+<label>Pravidla komunikace<textarea name="instructions" maxlength="2500" rows="4" required>{{ chat_settings.instructions }}</textarea></label>
+<button class="btn primary" type="submit">Uložit nastavení</button></form></section>
+<section class="card admin-card" id="smart-workspace-settings">
+ <div class="panel-head"><div><span class="eyebrow">SMART WORKSPACE</span><h2>Boban · pracovní karty</h2>
+ <p class="muted">Zapni dostupné typy karet a urči jejich pořadí. Boban podle rozhovoru vybere nejvýše pět. Nový typ přidáme do centrálního registru, bez kopírování HTML a CSS.</p></div></div>
+ <form method="post" action="{{ url_for('admin_smart_cards') }}" class="smart-admin-list">
+ {% for key,card in smart_card_registry.items() %}
+ <div class="smart-admin-row"><label><input type="checkbox" name="card" value="{{ key }}" {% if key in smart_card_enabled %}checked{% endif %}> {{ card.title }}</label>
+ <label>Pořadí <input type="number" name="order_{{ key }}" min="0" max="99" value="{{ (smart_card_enabled.index(key)+1)*10 if key in smart_card_enabled else 90 }}"></label></div>
+ {% endfor %}
+ <button class="btn primary" type="submit">Uložit pracovní karty</button>
+ </form>
+</section>
+<section class="card admin-card" id="knowledge-library">
+ <div class="panel-head"><div><span class="eyebrow">ZNALOSTNÍ BÁZE</span><h2>SEO poradna · knihovna Bobana</h2>
+ <p class="muted">Trvalé znalosti pro všechny projekty nebo konkrétní web. Boban vyhledává související informace při každém dotazu a může na ně odkázat. Přidávání a změny schvaluje superadmin.</p></div></div>
+ <details class="connector-advanced"><summary>+ Přidat nový záznam</summary>
+ <form class="form" method="post" action="{{ url_for('admin_knowledge_save') }}">
+ <label>Název<input name="title" maxlength="220" required></label>
+ <label>Kategorie<input name="category" value="SEO" maxlength="100"></label>
+ <label>Stručné vysvětlení<input name="summary" maxlength="1000" required></label>
+ <label>Odborný obsah<textarea name="content" rows="7" required></textarea></label>
+ <label>Ověřitelný zdroj (nepovinné)<input type="url" name="source_url" placeholder="https://…"></label>
+ <label>Platnost<select name="project_id"><option value="">Všechny projekty</option>{% for p in projects %}<option value="{{ p.id }}">{{ p.name }}</option>{% endfor %}</select></label>
+ <button class="btn primary">Uložit do knihovny</button>
+ </form></details>
+ {% for e in knowledge_entries %}
+ <details class="connector-advanced"><summary>{{ e.title }} · {{ e.category }} · {{ 'Sdílená znalost' if not e.project_id else 'Projekt #' ~ e.project_id }}</summary>
+ <form class="form" method="post" action="{{ url_for('admin_knowledge_save') }}">
+ <input type="hidden" name="id" value="{{ e.id }}">
+ <label>Název<input name="title" value="{{ e.title }}" required></label>
+ <label>Kategorie<input name="category" value="{{ e.category }}"></label>
+ <label>Shrnutí<input name="summary" value="{{ e.summary }}" required></label>
+ <label>Obsah<textarea name="content" rows="6" required>{{ e.content }}</textarea></label>
+ <label>Zdroj<input type="url" name="source_url" value="{{ e.source_url or '' }}"></label>
+ <label>Platnost<select name="project_id"><option value="">Všechny projekty</option>{% for p in projects %}<option value="{{ p.id }}" {{ 'selected' if e.project_id==p.id else '' }}>{{ p.name }}</option>{% endfor %}</select></label>
+ <button class="btn primary">Uložit úpravy</button></form>
+ <form method="post" action="{{ url_for('admin_knowledge_delete',entry_id=e.id) }}" onsubmit="return confirm('Odstranit záznam z knihovny?')"><button class="btn">Smazat</button></form>
+ </details>
+ {% else %}<p class="muted">Zatím žádné vlastní články. Vestavěná SEO poradna zůstává dostupná.</p>{% endfor %}
+</section>
+<section class="card admin-card" id="admin-storage" data-storage-url="{{ url_for('admin_database_usage') }}">
+  <div class="panel-head"><div><span class="eyebrow">ÚLOŽIŠTĚ A DATABÁZE</span><h2>Využití dat podle účtů a projektů</h2>
+  <p class="muted">Celá databáze Bobana versus pracovní kopie e-shopových produktů. Změření spusť na vyžádání, aby běžná administrace nezatěžovala MariaDB.</p></div></div>
+  <button class="btn" type="button" data-storage-refresh>Načíst využití databáze</button>
+  <div data-storage-status role="status" aria-live="polite" class="muted">Údaje se zatím nenačítaly.</div>
+  <div data-storage-results hidden>
+    <div class="storage-kpis"><div><small>Databáze Bobana – celkem</small><strong data-storage-total>—</strong><span data-storage-backend>—</span></div>
+    <div><small>Databázové tabulky</small><strong data-storage-tables>—</strong></div>
+    <div><small>Produktová kopie – všechny projekty</small><strong data-storage-payload>—</strong></div></div>
+    <p class="muted" data-storage-note></p>
+    <details><summary>Podle účtů</summary><div class="storage-table-wrap"><table class="storage-table"><thead><tr><th>Účet</th><th>Projekty</th><th>Produkty</th><th>Varianty</th><th>Objem dat</th></tr></thead><tbody data-storage-accounts></tbody></table></div></details>
+    <details><summary>Podle projektů / e-shopů</summary><div class="storage-table-wrap"><table class="storage-table"><thead><tr><th>Projekt</th><th>Vlastník</th><th>Produkty</th><th>Varianty</th><th>Objem dat</th></tr></thead><tbody data-storage-projects></tbody></table></div></details>
+    <p class="muted" data-storage-disclaimer></p>
+  </div>
+</section>
+
+<section class="card admin-card" id="accounts">
+  <div class="panel-head"><div><span class="eyebrow">ÚČTY</span><h2>Správa účtů</h2><p class="muted">Admin řídí systém. Editor je placený aktivní účet. Visitor je read-only a může požádat o Editor přístup.</p></div></div>
+  <div class="account-list">
+    {% for u in users %}
+    <form class="account-row" method="post" action="{{ url_for('admin_user_update', user_id=u.id) }}">
+      <div class="account-main"><strong>{{ u.name }}</strong><span>{{ u.email }}</span><small>Vlastní projekty {{ u.owned_projects }} · přístupy {{ u.shared_projects }} · poslední login {{ u.last_login_at or '—' }}</small></div>
+      <label>Role<select name="role"><option value="visitor" {{ 'selected' if u.system_role=='visitor' else '' }}>Visitor</option><option value="editor" {{ 'selected' if u.system_role=='editor' else '' }}>Editor</option><option value="admin" {{ 'selected' if u.system_role=='admin' else '' }}>Admin</option></select></label>
+      <label>Stav<select name="account_status"><option value="active" {{ 'selected' if u.account_status=='active' else '' }}>Aktivní</option><option value="disabled" {{ 'selected' if u.account_status=='disabled' else '' }}>Deaktivovaný</option></select></label>
+      <label>Přístup<select name="paid_access_status"><option value="none" {{ 'selected' if u.paid_access_status=='none' else '' }}>Bez placeného</option><option value="requested" {{ 'selected' if u.paid_access_status=='requested' else '' }}>Žádost</option><option value="manual" {{ 'selected' if u.paid_access_status=='manual' else '' }}>Manuálně aktivní</option><option value="active" {{ 'selected' if u.paid_access_status=='active' else '' }}>Aktivní</option><option value="expired" {{ 'selected' if u.paid_access_status=='expired' else '' }}>Vypršel</option></select></label>
+      <label class="check-field"><input type="checkbox" name="email_alerts" value="1" {{ 'checked' if u.email_alerts else '' }}> E-mail upozornění</label>
+      <button class="btn small">Uložit</button>
+    </form>
+    {% endfor %}
+  </div>
+</section>
+
+<div class="admin-grid two" id="automation">
+  <section class="card admin-card wide-card"><div class="panel-head"><div><span class="eyebrow">AUTOMATIZACE</span><h2>Co Boban dělá pravidelně pro všechny placené účty</h2><p class="muted">Toto jsou systémová pravidla. Boban připravuje návrhy, ale změny webu dál čekají na schválení.</p></div></div>
+    <div class="rule-list">{% for r in rules %}<form class="rule-row" method="post" action="{{ url_for('admin_automation_update', rule_key=r.rule_key) }}"><div><strong>{{ r.name }}</strong><p>{{ r.description }}</p></div><label class="switch-field"><input type="checkbox" name="enabled" value="1" {{ 'checked' if r.enabled else '' }}> Zapnuto</label><label>Interval<input type="number" min="1" max="8760" name="interval_hours" value="{{ r.interval_hours }}"><small>hodin</small></label><button class="btn small">Uložit</button></form>{% endfor %}</div>
+  </section>
+  <section class="card admin-card" id="safe-diagnostics"><span class="eyebrow">DIAGNOSTIKA PRO PODPORU</span><h2>Bezpečný provozní manifest</h2><p>Jen technické stavy, průběh synchronizace, počty, nastavení dávek a typy chyb. Bez zdrojového kódu, klíčů, e-mailů a produktových dat. Odkaz může otevřít kdokoliv, kdo jej má — sdílej ho pouze s důvěryhodnou podporou.</p>{% if diagnostic_url %}<div class="commerce-controls"><a class="btn primary" href="{{ diagnostic_url }}" target="_blank" rel="noopener noreferrer">Zobrazit manifest</a><input style="min-width:220px;flex:1" type="text" readonly aria-label="Odkaz na diagnostický manifest" onclick="this.select()" value="{{ diagnostic_url }}"></div><p class="muted">Pro zneplatnění sdíleného odkazu nastav nové DIAGNOSTIC_MANIFEST_SECRET (minimálně 32 náhodných znaků) a restartuj aplikaci.</p>{% else %}<p class="commerce-warning">Nastav bezpečný SECRET_KEY nebo DIAGNOSTIC_MANIFEST_SECRET (alespoň 32 znaků), potom restartuj aplikaci.</p>{% endif %}</section>
+<section class="card admin-card" id="diagnostics"><span class="eyebrow">DIAGNOSTIKA</span><h2>Fronta, automatizace a vývoj</h2><div class="diag-list"><div><span>Jobs</span><b>{{ stats.jobs }}</b></div><div><span>Actions</span><b>{{ stats.actions }}</b></div><div><span>Worker last seen</span><b>{{ stats.worker.last_seen or '—' }}</b></div><div><span>Automation state</span><b>{{ stats.automation_state_count }}</b></div><div><span>Poslední automatizace</span><b>{{ stats.last_automation or '—' }}</b></div></div>{% if stats.automation_state_count == 0 %}<div class="connector-note trust-note">Automatizační pravidla ještě nemají ani jeden zaznamenaný běh. Pokud už je aplikace nasazená delší dobu, zkontroluj minutový cron <code>manage.py tick</code>. Akční worker může fungovat i bez pravidelné synchronizace dat.</div>{% endif %}<div class="admin-dev-actions"><form method="post" action="{{ url_for('admin_automation_run_now') }}"><button class="btn">Spustit automatizaci teď</button></form>{% if manifest_url %}<a class="btn primary" href="{{ manifest_url }}" target="_blank" rel="noopener">Otevřít developer manifest</a>{% else %}<span class="muted small">Developer manifest není aktivní — chybí DEVELOPER_MANIFEST_TOKEN.</span>{% endif %}</div>{% if stats.failed_jobs %}<h3>Poslední failed jobs</h3><div class="mini-list">{% for j in stats.failed_jobs %}<div><strong>#{{ j.id }} · {{ j.job_type }}</strong><span>projekt {{ j.project_id or '—' }} · {{ j.finished_at or j.created_at }}</span></div>{% endfor %}</div>{% else %}<p class="muted">Aktuálně bez failed jobs.</p>{% endif %}</section>
+</div>
+
+<section class="card admin-card" id="email"><div class="panel-head"><div><span class="eyebrow">E-MAIL</span><h2>Účet pro systémová upozornění</h2><p class="muted">SMTP účet používá Boban pro vybrané systémové e-maily. Heslo je šifrované stejným aplikačním SECRET_KEY.</p></div></div>
+  <form class="form admin-email-form" method="post" action="{{ url_for('admin_email_update') }}">
+    <label class="check-field"><input type="checkbox" name="enabled" value="1" {{ 'checked' if smtp.enabled else '' }}> SMTP zapnuté</label>
+    <label class="check-field"><input type="checkbox" name="notification_enabled" value="1" {{ 'checked' if smtp.notification_enabled else '' }}> Odesílat systémová upozornění</label>
+    <label>SMTP server<input name="host" value="{{ smtp.host or '' }}" placeholder="smtp.example.com"></label><label>Port<input type="number" name="port" value="{{ smtp.port or 587 }}"></label>
+    <label>Zabezpečení<select name="security"><option value="starttls" {{ 'selected' if smtp.security=='starttls' else '' }}>STARTTLS</option><option value="ssl" {{ 'selected' if smtp.security=='ssl' else '' }}>SSL</option><option value="none" {{ 'selected' if smtp.security=='none' else '' }}>Bez TLS</option></select></label>
+    <label>Uživatel<input name="username" value="{{ smtp.username or '' }}"></label><label>Heslo<input type="password" name="password" placeholder="Ponech prázdné pro zachování"></label>
+    <label>From e-mail<input type="email" name="from_email" value="{{ smtp.from_email or '' }}"></label><label>Jméno odesílatele<input name="from_name" value="{{ smtp.from_name or 'Boban • Web Booster' }}"></label>
+    <fieldset class="level-field"><legend>Posílat úrovně</legend>{% for level in ['error','warning','success'] %}<label class="check-field"><input type="checkbox" name="notification_levels" value="{{ level }}" {{ 'checked' if level in (smtp.notification_levels or ['error']) else '' }}> {{ level }}</label>{% endfor %}</fieldset>
+    <button class="btn primary">Uložit e-mail</button>
+  </form>
+  <form class="inline-test-form" method="post" action="{{ url_for('admin_email_test') }}"><input type="email" name="to_email" value="{{ current_user.email }}"><button class="btn">Poslat test</button></form>
+</section>
+
+<section class="card admin-card"><span class="eyebrow">PROJEKTY</span><h2>Všechny projekty</h2><div class="admin-table"><div class="admin-table-row head"><span>Projekt</span><span>Vlastník</span><span>Stav</span><span></span></div>{% for p in projects %}<div class="admin-table-row"><span><strong>{{ p.name }}</strong><small>{{ p.site_url }}</small></span><span>{{ p.owner_name }}<small>{{ p.owner_email }}</small></span><span>{{ p.status }}</span><span><a class="btn small" href="{{ url_for('project', project_id=p.id) }}">Otevřít</a></span></div>{% endfor %}</div></section>
+{% endblock %}

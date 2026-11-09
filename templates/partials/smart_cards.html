@@ -1,0 +1,39 @@
+<div class="smart-cards" data-smart-cards>
+  {% for kind in smart_cards %}
+  <section class="card smart-card" data-card-kind="{{ kind }}" aria-label="{{ kind }}">
+    {% if kind=='goal' %}
+      <header><span class="eyebrow">OBCHODNÍ CÍL</span><a href="{{ url_for('project_goals',project_id=smart_project.id) }}">Upravit ↗</a></header>
+      <strong>{{ smart_strategy.business_goal or 'Cíl ještě není nastavený' }}</strong>
+      {% if smart_strategy.primary_conversion %}<p>Konverze: {{ smart_strategy.primary_conversion }}</p>{% endif %}
+      <button type="button" class="smart-text-action" data-chat-prompt="Chci s tebou upřesnit a následně potvrdit obchodní cíle projektu.">Probrat v chatu →</button>
+    {% elif kind=='performance' %}
+      <header><span class="eyebrow">NÁVŠTĚVNOST</span><a href="{{ url_for('business_results',project_id=smart_project.id) }}">Detail ↗</a></header>
+      {% if smart_gsc and smart_gsc.current and smart_progress.kpis %}
+        <div class="smart-kpis"><div><span>Prokliky · 28 dní</span><strong>{{ smart_progress.kpis.clicks.current|round|int }}</strong></div><div><span>Organické relace</span><strong>{{ smart_progress.kpis.organic_sessions.current|round|int }}</strong></div></div>
+        <small>Prodej a přínos změn nelze odvodit jen z návštěvnosti.</small>
+      {% else %}<p>Nemám aktuální ověřená data o návštěvnosti.</p><a href="{{ url_for('connectors',project_id=smart_project.id) }}">Zkontrolovat konektory →</a>{% endif %}
+    {% elif kind=='tasks' %}
+      <header><span class="eyebrow">ÚKOLY</span><a href="{{ url_for('actions',project_id=smart_project.id,view='todo') }}">Otevřít ↗</a></header>
+      <div class="smart-kpis"><div><span>Rozpracováno</span><strong>{{ smart_advisor.pending }}</strong></div><div><span>Právě běží</span><strong>{{ smart_queue.count or 0 }}</strong></div></div>
+      <p>Úpravy vyžadující souhlas čekají na schválení.</p>
+    {% elif kind=='integrations' %}
+      <header><span class="eyebrow">INTEGRACE</span><a href="{{ url_for('connectors',project_id=smart_project.id) }}">Spravovat ↗</a></header>
+      <p>Fresh Core: <strong>{{ 'propojený zápis' if smart_core_connected else 'zápis není ověřen' }}</strong></p>
+      <p>GSC: {{ 'data dostupná' if smart_gsc else 'bez dat' }} · GA4: {{ 'data dostupná' if smart_ga4 else 'bez dat' }}</p>
+    {% elif kind=='catalog' %}
+      <header><span class="eyebrow">KATALOGY</span><a href="{{ url_for('connectors',project_id=smart_project.id) }}">Konektory ↗</a></header>
+      <strong>Google Merchant · Heureka · Zboží.cz</strong>
+      <p>Vlastní Catalog Engine se připravuje. Synchronizaci zatím neoznačuji jako funkční.</p>
+      <button type="button" class="smart-text-action" data-chat-prompt="Zhodnoť připravenost mého e-shopu na produktové katalogy, co lze ověřit a co ještě chybí.">Probrat katalogy →</button>
+    {% elif kind=='seo' %}
+      <header><span class="eyebrow">SEO AUDIT</span><a href="{{ url_for('seo',project_id=smart_project.id) }}">Audit ↗</a></header>
+      <div class="smart-kpis"><div><span>Technické SEO</span><strong>{{ smart_scorecard.technical }}/100</strong></div><div><span>Obsahové SEO</span><strong>{{ smart_scorecard.content }}/100</strong></div></div>
+      <small>Skóre není obchodní výsledek.</small>
+    {% elif kind=='plan' %}
+      <header><span class="eyebrow">DALŠÍ KROKY</span><a href="{{ url_for('actions',project_id=smart_project.id,view='todo') }}">Úkoly ↗</a></header>
+      {% set steps=(smart_advisor.work_plan or {}).get('items',[]) %}
+      {% for step in steps[:2] %}<p><strong>{{ loop.index }}.</strong> {{ step.title }}</p>{% else %}<p>Pro tento projekt zatím nemám nový ověřený plán.</p>{% endfor %}
+    {% endif %}
+  </section>
+  {% endfor %}
+</div>

@@ -1,0 +1,122 @@
+{% extends "base.html" %}
+{% block title %}Viditelnost – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><div class="eyebrow page-eyebrow">SEARCH PERFORMANCE</div><h1>Viditelnost ve vyhledávání</h1><p class="lead-sm">SEO skóre je diagnostika. Tady ukazuji skutečný výkon z Googlu a zároveň hlídám, jestli jsou data správně připojená a dávají smysl.</p></div>
+  <div class="actions">{% if gsc %}<form method="post" action="{{ url_for('search_console_sync', project_id=project.id) }}"><button class="btn">Aktualizovat Search Console</button></form>{% endif %}{% if ga4 %}<form method="post" action="{{ url_for('ga4_sync', project_id=project.id) }}"><button class="btn">Aktualizovat GA4</button></form>{% endif %}</div>
+</div>
+
+{% if not gsc %}
+<div class="card visibility-empty"><div><h2>Nejdřív připoj Google Search Console</h2><p>Bez ní neumím poctivě říct, na jaké dotazy se web zobrazuje ani jakou má skutečnou pozici.</p></div><a class="btn primary" href="{{ url_for('connectors', project_id=project.id) }}">Připojit Google</a></div>
+{% else %}
+
+{% if trust.spam.level != 'ok' %}
+<section class="card trust-alert {{ 'critical' if trust.spam.level=='critical' else 'warning' }}">
+  <div class="trust-alert-icon">!</div>
+  <div>
+    <span class="eyebrow">DATA TRUST • SEO ANOMÁLIE</span>
+    <h2>{{ 'Závažné podezření na SEO spam' if trust.spam.level=='critical' else 'Podezřelé vyhledávací dotazy' }}</h2>
+    <p>Část dotazů z Google Search Console tematicky připomíná typické spamové / gambling / APK vzorce. Neberu proto vysokou návštěvnost automaticky jako SEO úspěch. Nejdřív je potřeba ověřit web a index Googlu.</p>
+    <div class="trust-query-list">{% for q in trust.spam.queries[:6] %}<span>{{ q.query }} • {{ q.clicks|round|int }} kliknutí</span>{% endfor %}</div>
+    <small>{{ (trust.spam.click_share*100)|round(1) }} % kliknutí v načteném vzorku připadá na podezřelé dotazy.</small>
+  </div>
+</section>
+{% endif %}
+
+<div class="data-trust-grid mobile-carousel" data-mobile-carousel>
+  <div class="card trust-card {{ 'ok' if trust.gsc_domain_verified else 'warn' }}"><span>Search Console</span><strong>{{ 'Doména ověřena' if trust.gsc_domain_verified else 'Ověřit property' }}</strong><small>{{ gsc.property or gsc_config.selected_property }}</small></div>
+  <div class="card trust-card {{ 'ok' if trust.ga4_domain_verified else 'warn' }}"><span>GA4 web stream</span><strong>{{ 'Doména ověřena' if trust.ga4_domain_verified else 'Ověřit stream' }}</strong><small>{{ trust.ga4_verified_uri or ga4_config.selected_property or 'GA4 není vybrána' }}</small></div>
+  <div class="card trust-card {{ 'ok' if trust.cross_source_status=='ok' else ('warn' if trust.cross_source_status=='warning' else '') }}"><span>Search Console × GA4</span><strong>{% if trust.cross_source_status=='warning' %}Výrazný rozdíl{% elif trust.cross_source_status=='ok' %}Poměr v normě{% else %}Čekám na data{% endif %}</strong><small>{% if trust.gsc_ga4_ratio is not none %}GA4 organic sessions / GSC clicks: {{ trust.gsc_ga4_ratio|round(2) }}{% else %}Porovnávám stejné období, jakmile jsou oba zdroje načtené.{% endif %}</small></div>
+</div>
+{% if trust.cross_source_status=='warning' %}<div class="connector-note trust-note">Rozdíl mezi Search Console a GA4 nemusí znamenat chybu: ovlivňuje ho consent, blokování měření, atribuce i opakované kliknutí. Je ale dost velký na to, abych doporučil kontrolu měření.</div>{% endif %}
+
+{% set cur=gsc.current or {} %}{% set prev=gsc.previous or {} %}{% set ins=gsc.insights or {} %}{% set ranks=ins.ranks or {} %}
+<section class="section-head progress-head"><div><span class="eyebrow">PROGRES • PRÁCE × VÝSLEDEK</span><h2>Co Boban skutečně udělal a co se změnilo</h2><p>Odděluji odvedenou práci od výsledku ve vyhledávání. Samotný počet úkolů není úspěch — cílem jsou lepší relevantní pozice, návštěvnost a konverze.</p></div></section>
+<div class="progress-work-grid mobile-carousel" data-mobile-carousel>
+  <div class="card metric-card emphasis"><span>Ověřeně hotovo</span><strong>{{ progress.work.done }}</strong><small>publikované a ověřené změny</small></div>
+  <div class="card metric-card"><span>Čeká na schválení</span><strong>{{ progress.work.todo }}</strong><small>návrhy, které potřebují rozhodnutí</small></div>
+  <div class="card metric-card"><span>Právě probíhá</span><strong>{{ progress.work.running }}</strong><small>fronta, zápis nebo ověření</small></div>
+  <div class="card metric-card"><span>Vyhodnoceno 28+ dní</span><strong>{{ progress.work.measured }}</strong><small>zásahy s uzavřeným měřicím oknem</small></div>
+</div>
+
+{% set pk=progress.kpis %}
+<div class="progress-result-grid mobile-carousel" data-mobile-carousel>
+  <div class="card progress-kpi"><span>Kliknutí / 28 dní</span><strong>{{ pk.clicks.current|round|int }}</strong><small class="{{ 'trend-up' if (pk.clicks.pct or 0) > 0 else ('trend-down' if (pk.clicks.pct or 0) < 0 else '') }}">{% if pk.clicks.pct is not none %}{{ '+' if pk.clicks.pct >= 0 else '' }}{{ pk.clicks.pct|round(1) }} %{% else %}bez srovnávací základny{% endif %}</small></div>
+  <div class="card progress-kpi"><span>Imprese / 28 dní</span><strong>{{ pk.impressions.current|round|int }}</strong><small class="{{ 'trend-up' if (pk.impressions.pct or 0) > 0 else ('trend-down' if (pk.impressions.pct or 0) < 0 else '') }}">{% if pk.impressions.pct is not none %}{{ '+' if pk.impressions.pct >= 0 else '' }}{{ pk.impressions.pct|round(1) }} %{% else %}bez srovnávací základny{% endif %}</small></div>
+  <div class="card progress-kpi"><span>Průměrná pozice</span><strong>{{ pk.position.current|round(1) }}</strong><small class="{{ 'trend-up' if pk.position.delta > 0 else ('trend-down' if pk.position.delta < 0 else '') }}">{{ '+' if pk.position.delta >= 0 else '' }}{{ pk.position.delta|round(1) }} pozice</small></div>
+  <div class="card progress-kpi"><span>Dotazy v TOP 10</span><strong>{{ pk.top10.current }}</strong><small class="{{ 'trend-up' if pk.top10.delta > 0 else ('trend-down' if pk.top10.delta < 0 else '') }}">{{ '+' if pk.top10.delta >= 0 else '' }}{{ pk.top10.delta }} proti předchozímu období</small></div>
+  <div class="card progress-kpi"><span>Organic sessions</span><strong>{{ pk.organic_sessions.current|round|int }}</strong><small class="{{ 'trend-up' if (pk.organic_sessions.pct or 0) > 0 else ('trend-down' if (pk.organic_sessions.pct or 0) < 0 else '') }}">{% if pk.organic_sessions.pct is not none %}{{ '+' if pk.organic_sessions.pct >= 0 else '' }}{{ pk.organic_sessions.pct|round(1) }} %{% else %}čekám na GA4 srovnání{% endif %}</small></div>
+</div>
+
+{% if progress.daily %}
+<div class="progress-chart-grid">
+  <section class="card trend-card"><div class="panel-head"><div><span class="eyebrow">90 DNÍ</span><h3>Organická kliknutí</h3></div><small>{{ progress.clicks_chart.min|round|int }}–{{ progress.clicks_chart.max|round|int }} / den</small></div><svg viewBox="0 0 800 180" role="img" aria-label="Vývoj organických kliknutí"><line x1="12" y1="168" x2="788" y2="168" class="trend-axis"/><polyline points="{{ progress.clicks_chart.points }}" class="trend-line"/></svg></section>
+  <section class="card trend-card"><div class="panel-head"><div><span class="eyebrow">90 DNÍ</span><h3>Průměrná pozice</h3></div><small>nižší číslo je lepší</small></div><svg viewBox="0 0 800 180" role="img" aria-label="Vývoj průměrné pozice"><line x1="12" y1="168" x2="788" y2="168" class="trend-axis"/><polyline points="{{ progress.position_chart.points }}" class="trend-line"/></svg></section>
+</div>
+{% else %}
+<div class="connector-note">Po příští synchronizaci Search Console načtu i 90denní denní trend. Dosavadní verze ukládala hlavně 28denní snapshoty.</div>
+{% endif %}
+
+{% if progress.recent_done %}
+<section class="card progress-done-card"><div class="panel-head"><div><span class="eyebrow">HOTOVÁ PRÁCE</span><h3>Poslední ověřené zásahy</h3><p class="muted small">Toto jsou změny, které Boban nejen navrhl, ale skutečně publikoval a ověřil.</p></div><a class="btn small" href="{{ url_for('actions', project_id=project.id, view='done') }}">Celá historie</a></div><div class="done-work-list">{% for a in progress.recent_done[:8] %}<div class="done-work-row"><div><strong>#{{ a.id }} · {{ a.action_type }}</strong><span>{{ a.target_url or '—' }}</span></div><div><small>{{ a['fields']|join(', ') if a['fields'] else 'systémová změna' }}</small><b>{{ a.status }}</b></div></div>{% endfor %}</div></section>
+{% endif %}
+
+<div class="source-period"><b>Google Search Console</b> • {{ gsc_period_label }} • výkon obvykle načítám s několikadenním odstupem kvůli stabilitě dat</div>
+<div class="performance-kpis mobile-carousel" data-mobile-carousel>
+  <div class="card metric-card emphasis"><span>Kliknutí • 28 dní</span><strong>{{ cur.clicks|round|int }}</strong><small>předchozí období {{ prev.clicks|round|int }}</small></div>
+  <div class="card metric-card"><span>Imprese</span><strong>{{ cur.impressions|round|int }}</strong><small>kolikrát Google web zobrazil</small></div>
+  <div class="card metric-card"><span>CTR</span><strong>{{ (cur.ctr*100)|round(1) }} %</strong><small>proklik ze zobrazení</small></div>
+  <div class="card metric-card"><span>Průměrná pozice</span><strong>{{ cur.position|round(1) }}</strong><small>nižší číslo je výš</small></div>
+  <div class="card metric-card"><span>TOP 10 dotazů</span><strong>{{ (ranks.top3 or 0)+(ranks.top10 or 0) }}</strong><small>z načteného vzorku dotazů</small></div>
+  <div class="card metric-card"><span>Na dosah</span><strong>{{ (ins.opportunities or [])|length }}</strong><small>dotazy na pozicích 4–20 s impresí</small></div>
+</div>
+
+<div class="performance-grid">
+  <section class="card performance-panel wide"><div class="panel-head"><div><span class="eyebrow">DOTAZY A FRÁZE</span><h2>Na co tě lidé skutečně nacházejí</h2><p class="muted small">Search Console může část anonymizovaných dotazů nezobrazit, proto je seznam vzorek, nikoli úplný součet všech hledání.</p></div></div>
+    <div class="performance-table"><div class="performance-row head"><span>Dotaz</span><span>Kliknutí</span><span>Imprese</span><span>CTR</span><span>Pozice</span></div>{% for r in (gsc.top_queries or [])[:40] %}<div class="performance-row"><strong>{{ r['keys'][0] if r['keys'] else '—' }}</strong><span>{{ r.clicks|round|int }}</span><span>{{ r.impressions|round|int }}</span><span>{{ (r.ctr*100)|round(1) }} %</span><span>{{ r.position|round(1) }}</span></div>{% else %}<div class="empty-row">Search Console zatím nevrátila dotazy.</div>{% endfor %}</div>
+  </section>
+
+  <section class="card performance-panel"><span class="eyebrow">NEJRYCHLEJŠÍ PŘÍLEŽITOSTI</span><h3>Dotazy „na dosah“</h3><p class="muted small">Vysoké imprese a pozice přibližně 4–20. Tady často dává smysl nejdřív ladit obsah, title, CTR a interní odkazy.</p><div class="mini-list">{% for r in (ins.opportunities or [])[:10] %}<div><strong>{{ r.query }}</strong><span>pozice {{ r.position|round(1) }} · {{ r.impressions|round|int }} impresí</span></div>{% else %}<span class="muted">Zatím nemám dost dat.</span>{% endfor %}</div></section>
+  <section class="card performance-panel"><span class="eyebrow">TREND</span><h3>Co roste</h3><div class="mini-list">{% for r in (ins.gainers or [])[:10] %}<div><strong>{{ r.query }}</strong><span>+{{ r.position_change|round(1) }} pozic · nyní {{ r.position|round(1) }}</span></div>{% else %}<span class="muted">Zatím bez výrazného růstu.</span>{% endfor %}</div></section>
+  <section class="card performance-panel"><span class="eyebrow">TREND</span><h3>Co klesá</h3><div class="mini-list">{% for r in (ins.decliners or [])[:10] %}<div><strong>{{ r.query }}</strong><span>{{ r.position_change|round(1) }} pozic · nyní {{ r.position|round(1) }}</span></div>{% else %}<span class="muted">Zatím bez výrazného poklesu.</span>{% endfor %}</div></section>
+  <section class="card performance-panel"><span class="eyebrow">CTR</span><h3>Dobrá pozice, slabý proklik</h3><div class="mini-list">{% for r in (ins.low_ctr or [])[:10] %}<div><strong>{{ r.query }}</strong><span>pozice {{ r.position|round(1) }} · CTR {{ (r.ctr*100)|round(1) }} %</span></div>{% else %}<span class="muted">Nic výrazného jsem nenašel.</span>{% endfor %}</div></section>
+  <section class="card performance-panel"><span class="eyebrow">KANIBALIZACE</span><h3>Více URL pro stejný dotaz</h3><div class="mini-list">{% for r in (ins.cannibalization or [])[:8] %}<div><strong>{{ r.query }}</strong><span>{{ r.pages|length }} konkurenční stránky · {{ r.impressions|round|int }} impresí</span></div>{% else %}<span class="muted">Ve vzorku nevidím výraznou kanibalizaci.</span>{% endfor %}</div></section>
+</div>
+
+{% if ga4 and (ga4.current_total or ga4.current) %}
+<section class="section-head"><div><span class="eyebrow">GOOGLE ANALYTICS 4</span><h2>Co se děje po příchodu na web</h2><p>Rozlišuji celý web od Organic Search, aby se čísla dala porovnat s Analytics a zároveň byla užitečná pro SEO.</p></div></section>
+<div class="source-period"><b>Google Analytics 4</b> • {{ ga4_period_label }} • property {{ ga4.property }}{% if ga4_config.selected_verified_uri %} • stream {{ ga4_config.selected_verified_uri }}{% endif %}</div>
+
+{% set total=ga4.current_total or {} %}
+<h3 class="data-subhead">Celý web</h3>
+<div class="performance-kpis mobile-carousel" data-mobile-carousel>
+  <div class="card metric-card emphasis"><span>Aktivní uživatelé</span><strong>{{ total.activeUsers|round|int }}</strong></div>
+  <div class="card metric-card"><span>Sessions</span><strong>{{ total.sessions|round|int }}</strong></div>
+  <div class="card metric-card"><span>Engaged sessions</span><strong>{{ total.engagedSessions|round|int }}</strong></div>
+  <div class="card metric-card"><span>Key events</span><strong>{{ total.keyEvents|round|int }}</strong></div>
+  <div class="card metric-card"><span>Revenue</span><strong>{{ total.totalRevenue|round(0)|int }}</strong></div>
+</div>
+
+{% set a=ga4.current_organic or ga4.current or {} %}
+<h3 class="data-subhead">Pouze Organic Search</h3>
+<div class="performance-kpis mobile-carousel" data-mobile-carousel>
+  <div class="card metric-card emphasis"><span>Organic sessions</span><strong>{{ a.sessions|round|int }}</strong></div>
+  <div class="card metric-card"><span>Aktivní uživatelé</span><strong>{{ a.activeUsers|round|int }}</strong></div>
+  <div class="card metric-card"><span>Engaged sessions</span><strong>{{ a.engagedSessions|round|int }}</strong></div>
+  <div class="card metric-card"><span>Key events</span><strong>{{ a.keyEvents|round|int }}</strong></div>
+  <div class="card metric-card"><span>Revenue</span><strong>{{ a.totalRevenue|round(0)|int }}</strong></div>
+</div>
+<div class="performance-grid">
+  <section class="card performance-panel wide"><span class="eyebrow">ORGANIC LANDING PAGES</span><h3>Kam chodí organická návštěvnost</h3><div class="performance-table"><div class="performance-row ga-head"><span>Landing page</span><span>Sessions</span><span>Key events</span><span>Revenue</span></div>{% for r in (ga4.landing_pages or [])[:30] %}<div class="performance-row ga-head"><strong>{{ r.landingPagePlusQueryString or '—' }}</strong><span>{{ r.sessions|round|int }}</span><span>{{ r.keyEvents|round|int }}</span><span>{{ r.totalRevenue|round(0)|int }}</span></div>{% else %}<div class="empty-row">GA4 zatím nevrátila organické landing pages.</div>{% endfor %}</div></section>
+  <section class="card performance-panel wide"><span class="eyebrow">KONTROLA MĚŘENÉ DOMÉNY</span><h3>Hosty, které GA4 skutečně měří</h3><div class="mini-list">{% for r in (ga4.hostnames or [])[:10] %}<div><strong>{{ r.hostName or '(not set)' }}</strong><span>{{ r.sessions|round|int }} sessions · {{ r.activeUsers|round|int }} aktivních uživatelů</span></div>{% else %}<span class="muted">Hostname data zatím nejsou k dispozici.</span>{% endfor %}</div></section>
+</div>
+{% else %}<div class="card visibility-empty"><div><h3>Připoj GA4 a spojíme pozice s výsledkem</h3><p>Uvidíš zvlášť celý web a Organic Search, landing pages, klíčové události a revenue.</p></div><a class="btn" href="{{ url_for('connectors', project_id=project.id) }}">Připojit Analytics</a></div>{% endif %}
+
+<section class="section-head"><div><span class="eyebrow">BOBAN MŮŽE I ZAPISOVAT</span><h2>Schválené změny v Google službách</h2><p>Nic nepíšu automaticky. Nejdřív připravím úkol, ty ho můžeš upravit a až potom ho publikuji přes API.</p></div></section>
+<div class="connector-action-grid">
+  <section class="card"><h3>Search Console sitemap</h3><p>Odeslat nebo odebrat sitemap z připojené Search Console property.</p>{% if gsc_config.write_enabled and gsc_config.selected_property %}<form class="form compact-form" method="post" action="{{ url_for('search_console_sitemap_prepare', project_id=project.id) }}"><label>Sitemap URL<input name="sitemap_url" value="{{ project.site_url.rstrip('/') }}/sitemap_index.xml" required></label><label>Akce<select name="operation"><option value="submit_sitemap">Odeslat / aktualizovat</option><option value="delete_sitemap">Odebrat</option></select></label><button class="btn primary">Připravit úkol</button></form>{% if sitemaps %}<div class="connector-note">Search Console nyní eviduje {{ sitemaps|length }} sitemap.</div>{% endif %}{% else %}<div class="connector-note">Pro zápis připoj Search Console s oprávněním pro změny.</div><a class="btn" href="{{ url_for('connectors', project_id=project.id) }}">Nastavit oprávnění</a>{% endif %}</section>
+  <section class="card"><h3>URL Inspection</h3><p>Zkontroluji, jak Google konkrétní URL eviduje ve svém indexu.</p>{% if gsc_config.selected_property %}<form class="form compact-form" method="post" action="{{ url_for('search_console_inspect', project_id=project.id) }}"><label>URL<input name="inspection_url" value="{{ project.site_url }}" required></label><button class="btn">Zkontrolovat Google index</button></form>{% else %}<div class="connector-note">Nejdřív vyber Search Console property.</div>{% endif %}</section>
+  <section class="card"><h3>GA4 Key Event</h3><p>Připravím označení existujícího eventu jako klíčové události. Zápis proběhne až po schválení v Úkolech.</p>{% if ga4_config.write_enabled and ga4_config.selected_property %}<form class="form compact-form" method="post" action="{{ url_for('ga4_key_event_prepare', project_id=project.id) }}"><label>Event name<input name="event_name" placeholder="generate_lead" required></label><label>Počítání<select name="counting_method"><option value="ONCE_PER_EVENT">Každá událost</option><option value="ONCE_PER_SESSION">Jednou za session</option></select></label><button class="btn primary">Připravit úkol</button></form>{% else %}<div class="connector-note">GA4 zápis povolím až po ověření web streamu a edit oprávnění.</div><a class="btn" href="{{ url_for('connectors', project_id=project.id) }}">Nastavit Analytics</a>{% endif %}</section>
+</div>
+{% endif %}
+{% endblock %}

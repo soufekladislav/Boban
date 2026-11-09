@@ -1,0 +1,104 @@
+{% extends "base.html" %}
+{% block title %}Úkoly – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><h1>Úkoly</h1><p class="lead-sm">Boban připraví řešení. Ty ho můžeš před publikací libovolně upravit. Teprve potom změnu pošlu přes správný konektor (Fresh Core, Search Console nebo GA4) a ověřím výsledek.</p></div>
+</div>
+
+<div class="tab-row">
+  <a class="tab {{ 'active' if view=='todo' }}" href="{{ url_for('actions', project_id=project.id, view='todo') }}">K řešení <b>{{ counts.todo_count or 0 }}</b></a>
+  <a class="tab {{ 'active' if view=='done' }}" href="{{ url_for('actions', project_id=project.id, view='done') }}">Dokončené <b>{{ counts.done_count or 0 }}</b></a>
+  <a class="tab {{ 'active' if view=='hidden' }}" href="{{ url_for('actions', project_id=project.id, view='hidden') }}">Odložené / skryté <b>{{ counts.hidden_count or 0 }}</b></a>
+  <a class="tab {{ 'active' if view=='all' }}" href="{{ url_for('actions', project_id=project.id, view='all') }}">Vše <b>{{ counts.total_count or 0 }}</b></a>
+</div>
+
+{% if view=='todo' and queue.total and not worker.healthy %}
+<div class="info-block wide-info" role="status"><div><b>SEO worker není potvrzen jako aktivní</b><span>
+{{ queue.total }} úloh čeká nebo se zpracovává, ale poslední odezva SEO workeru chybí nebo je stará.
+Prověř naplánování <code>manage.py work-queue</code> a jeho log. Úkoly bez schválení se nepublikují.
+</span></div></div>
+{% endif %}
+{% if view=='todo' and queue.batch_total %}
+<div class="queue-status queue-progress-card" data-queue-card data-project-id="{{ project.id }}"><div class="queue-progress-copy"><span class="live-dot"></span><strong data-queue-label>{{ ('Úlohy čekají – worker nepracuje' if not worker.healthy else 'Úlohy čekají / probíhají') if queue.total else ('Některé úkoly skončily chybou' if queue.failed else 'Poslední dávka dokončena') }}</strong><p>Dokončeno <b data-queue-done>{{ queue.batch_done }}</b> z <b data-queue-total>{{ queue.batch_total }}</b> skupin úkolů. <span data-queue-errors>{% if queue.failed %}Chyb: {{ queue.failed }}.{% endif %}</span> Změny vyžadující schválení se nepublikují samy.</p><div class="progress-track" role="progressbar" aria-label="Průběh úkolů" aria-valuenow="{{ queue.percent }}" aria-valuemin="0" aria-valuemax="100" data-queue-progress><div style="width:{{ queue.percent }}%" data-queue-fill></div></div><small data-queue-pct>{{ queue.percent }} %</small></div></div>
+{% endif %}
+
+<div class="info-block wide-info"><div><b>Workflow</b><span>Analýza → Bobanův návrh → tvoje úprava → publikace → ověření cílovou službou + měření dopadu → měření dopadu. AI návrh není automaticky finální text.</span></div></div>
+
+<form id="actions-form" method="post"></form>
+<section class="card table-card">
+  <div class="panel-head selection-toolbar">
+    <div><strong>{{ 'Připravené úkoly' if view=='todo' else ('Dokončené úkoly' if view=='done' else ('Odložené a skryté úkoly' if view=='hidden' else 'Všechny úkoly')) }}</strong><div class="muted small">{{ actions|length }} zobrazených položek</div></div>
+    {% if view in ['todo','hidden'] %}<div class="selection-actions"><label class="select-all"><input type="checkbox" class="js-select-all" data-select-all="#actions-form"> Vybrat vše</label>{% if view=='todo' %}<button class="btn primary" type="submit" form="actions-form" formaction="{{ url_for('actions_bulk_apply', project_id=project.id) }}">Publikovat vybrané</button><button class="btn subtle" type="submit" form="actions-form" formaction="{{ url_for('actions_state', project_id=project.id) }}" name="task_action" value="snooze">Odložit 30 dní</button><button class="btn subtle danger-text" type="submit" form="actions-form" formaction="{{ url_for('actions_state', project_id=project.id) }}" name="task_action" value="dismiss">Zahodit</button>{% else %}<button class="btn" type="submit" form="actions-form" formaction="{{ url_for('actions_state', project_id=project.id) }}" name="task_action" value="restore">Obnovit vybrané</button>{% endif %}</div>{% endif %}
+  </div>
+
+  <div class="task-list clean-task-list">
+    {% for a in actions %}
+    <article class="task-card-clean task-card-v7 compact-task">
+      <div class="task-check">{% if view in ['todo','hidden'] and a.status in ['draft','failed','approved','snoozed','dismissed'] %}<input class="js-row-check" form="actions-form" type="checkbox" name="action_ids" value="{{ a.id }}">{% endif %}</div>
+      <div class="task-content-clean">
+        <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>Úkol #{{ a.id }}</strong> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
+        {% if a.target_url %}<div class="muted small task-url-text">{{ a.target_url }}</div>{% endif %}
+
+        <details class="task-expand" {{ 'open' if request.args.get('expand') == a.id|string else '' }}><summary>Detail úkolu · navržená změna, důvod a ověření</summary>
+        {% if a.status in ['draft','failed','approved'] and a.proposed %}
+        <div class="proposal-workflow">
+          {% if a.before %}
+          <div class="proposal-stage current-stage"><span class="stage-label">1 · Současný stav (pro kontext)</span>{% if a.before.title %}<div class="proposal-field"><small>SEO title</small><p>{{ a.before.title }}</p></div>{% endif %}{% if a.before.description %}<div class="proposal-field"><small>Meta description</small><p>{{ a.before.description }}</p></div>{% endif %}{% if a.before.alt is defined %}<div class="proposal-field"><small>Současný ALT</small><p>{{ a.before.alt or '(prázdný)' }}</p>{% if a.before.filename %}<small>{{ a.before.filename }}</small>{% endif %}</div>{% endif %}</div>
+          {% endif %}
+
+          <div class="proposal-stage ai-stage"><span class="stage-label">2 · Navržená změna</span>
+            {% set ai = a.ai_proposal if a.ai_proposal else a.proposed %}
+            {% if ai.title %}<div class="proposal-field"><small>SEO title</small><strong>{{ ai.title }}</strong></div>{% endif %}
+            {% if ai.description %}<div class="proposal-field"><small>Meta description</small><p>{{ ai.description }}</p></div>{% endif %}
+            {% if ai.canonical %}<div class="proposal-field"><small>Canonical</small><p>{{ ai.canonical }}</p></div>{% endif %}{% if ai.alt %}<div class="proposal-field"><small>ALT text</small><strong>{{ ai.alt }}</strong></div>{% endif %}{% if ai.sitemap_url %}<div class="proposal-field"><small>Sitemap</small><p>{{ ai.sitemap_url }}</p></div>{% endif %}{% if ai.event_name %}<div class="proposal-field"><small>GA4 Key Event</small><strong>{{ ai.event_name }}</strong><small>{{ ai.counting_method or 'ONCE_PER_EVENT' }}</small></div>{% endif %}
+          </div>
+
+          <form class="proposal-stage final-stage edit-proposal-form" method="post" action="{{ url_for('action_edit', project_id=project.id, action_id=a.id) }}">
+            <span class="stage-label">3 · Finální verze k publikaci</span>
+            <p class="muted small">Upravuji jen pole uvedená níže. Ostatní SEO údaje na stránce zůstanou beze změny. Na web se nic nepublikuje, dokud nestiskneš „Publikovat“.</p>
+            {% if a.provider=='search_console' and a.operation in ['submit_sitemap','delete_sitemap'] %}
+            <label>Sitemap URL <input name="sitemap_url" value="{{ a.proposed.sitemap_url or '' }}" placeholder="https://web.cz/sitemap_index.xml"></label>
+            <div class="proposal-directive"><b>Akce:</b> {{ 'odeslat / aktualizovat sitemap' if a.operation=='submit_sitemap' else 'odebrat sitemap ze Search Console' }}</div>
+            {% elif a.provider=='ga4' and a.operation=='create_key_event' %}
+            <label>GA4 event name <input name="event_name" value="{{ a.proposed.event_name or '' }}" maxlength="40" placeholder="generate_lead"></label>
+            <label>Počítání<select name="counting_method"><option value="ONCE_PER_EVENT" {{ 'selected' if a.proposed.counting_method!='ONCE_PER_SESSION' }}>Každá událost</option><option value="ONCE_PER_SESSION" {{ 'selected' if a.proposed.counting_method=='ONCE_PER_SESSION' }}>Max. jednou za session</option></select></label>
+            {% elif a.action_type=='update_image_alt' %}
+            <label>ALT text <input name="alt" value="{{ a.proposed.alt or '' }}" maxlength="400" placeholder="Popis významu obrázku v kontextu stránky"></label>
+            {% if a.before.image_url %}<div class="proposal-image-preview"><img src="{{ a.before.image_url }}" alt="Náhled obrázku"><small>{{ a.before.filename or a.before.image_url }}</small></div>{% endif %}
+            {% else %}
+            {% if 'title' in a.proposed %}<label>SEO title <input name="title" value="{{ a.proposed.title or '' }}" maxlength="180" placeholder="Můžeš doplnit nebo přepsat"></label>{% endif %}
+            {% if 'description' in a.proposed %}<label>Meta description <textarea name="description" rows="3" maxlength="600" placeholder="Můžeš doplnit nebo přepsat">{{ a.proposed.description or '' }}</textarea></label>{% endif %}
+            {% if 'canonical' in a.proposed %}<label>Canonical <input name="canonical" value="{{ a.proposed.canonical or '' }}" placeholder="Preferovaná URL"></label>{% endif %}
+            {% if 'noindex' in a.proposed %}<div class="proposal-directive"><b>Noindex:</b> {{ 'zapnout' if a.proposed.noindex else 'vypnout' }}</div>{% endif %}
+            {% if 'nofollow' in a.proposed %}<div class="proposal-directive"><b>Nofollow:</b> {{ 'zapnout' if a.proposed.nofollow else 'vypnout' }}</div>{% endif %}
+            {% endif %}
+            <div class="edit-proposal-actions"><button class="btn small-btn" type="submit">Uložit moje úpravy</button>{% if a.user_edited_at %}<small class="muted">Naposledy upraveno {{ a.user_edited_at.replace('T',' ') }}</small>{% endif %}</div>
+          </form>
+        </div>
+        {% if a.visible_error %}<div class="info-block wide-info" role="alert"><div><b>Poslední chyba provedení</b><span class="task-error-reason">{{ a.visible_error }}</span><small>Stav úlohy: {{ a.latest_job_status or a.status }}. Žádné opakování se nespustí pouhým otevřením detailu.</small></div></div>{% endif %}
+        <div class="task-expectation"><span>Proč a co očekávám</span><p>{{ a.expected_outcome or a.reason or 'Očekávaný výsledek zatím není popsán.' }}</p></div>
+        {% elif a.proposed %}
+        {% if a.visible_error %}<div class="info-block wide-info" role="alert"><div><b>Poslední chyba provedení</b><span class="task-error-reason">{{ a.visible_error }}</span></div></div>{% endif %}
+        <div class="task-summary-grid">
+          <div class="task-summary-box proposal-human"><span>Co bylo publikováno</span>{% if a.proposed.title %}<div class="proposal-field"><small>SEO title</small><strong>{{ a.proposed.title }}</strong></div>{% endif %}{% if a.proposed.description %}<div class="proposal-field"><small>Meta description</small><p>{{ a.proposed.description }}</p></div>{% endif %}{% if a.proposed.canonical %}<div class="proposal-field"><small>Canonical</small><p>{{ a.proposed.canonical }}</p></div>{% endif %}{% if a.proposed.alt %}<div class="proposal-field"><small>ALT text</small><strong>{{ a.proposed.alt }}</strong></div>{% endif %}{% if a.proposed.sitemap_url %}<div class="proposal-field"><small>Sitemap</small><p>{{ a.proposed.sitemap_url }}</p></div>{% endif %}{% if a.proposed.event_name %}<div class="proposal-field"><small>GA4 Key Event</small><strong>{{ a.proposed.event_name }}</strong></div>{% endif %}</div>
+          <div class="task-summary-box"><span>Proč a co očekáváme</span><p>{{ a.expected_outcome or a.reason or 'Očekávaný výsledek zatím není popsán.' }}</p></div>
+        </div>
+        {% endif %}
+
+        {% if a.status in ['applied','verified','completed','pending'] %}
+        <div class="result-grid">
+          <div class="result-box"><span>Provedení</span>{% if a.status=='pending' %}<b class="result-wait">Změnu ještě ověřuji</b>{% elif a.result %}<b class="result-ok">✓ Cílová služba odpověděla</b>{% else %}<b>Bez detailu</b>{% endif %}<small>{{ a.applied_at or '' }}</small></div>
+          <div class="result-box"><span>Jasný důkaz</span>{% if a.verification.rendered_confirmed %}<b class="result-ok">✓ Změna potvrzena</b>{% elif a.verification.core_confirmed %}<b class="result-wait">Zápis potvrzen, ověření čeká</b>{% else %}<b class="result-wait">Čeká na ověření</b>{% endif %}{% if a.verification.note %}<small>{{ a.verification.note }}</small>{% endif %}</div>
+          <div class="result-box"><span>Co to přineslo</span>{% if a.impact %}{% for key,val in a.impact.items() if key != 'measured_at' %}<div class="impact-inline"><b>{{ key }}</b><span>{{ val.before|round(2) }} → {{ val.current|round(2) }}</span><strong>{{ '+' if val.delta > 0 else '' }}{{ val.delta|round(2) }}</strong></div>{% endfor %}{% else %}<b class="result-wait">Ještě nemám dost dat z analytiky</b>{% endif %}</div>
+        </div>
+        {% endif %}
+        </details>
+      </div>
+      <div class="action-buttons clean-action-buttons">
+        {% if a.status in ['draft','failed'] %}{% if project.core_write_status == 'connected' %}<form method="post" action="{{ url_for('action_apply', project_id=project.id, action_id=a.id) }}"><button class="btn small-btn primary" type="submit">Publikovat</button></form>{% else %}<a class="btn small-btn" href="{{ url_for('connectors', project_id=project.id) }}">Připojit write bridge</a>{% endif %}{% elif a.status=='queued' %}<span class="muted small">Zpracovávám na pozadí</span>{% elif a.status in ['applied','verified','pending'] %}<form method="post" action="{{ url_for('action_verify', project_id=project.id, action_id=a.id) }}"><button class="btn small-btn" type="submit">Ověřit znovu</button></form>{% endif %}
+      </div>
+    </article>
+    {% else %}<div class="empty-inline">{{ 'Nemáš žádné úkoly k řešení.' if view=='todo' else ('Archiv je zatím prázdný.' if view=='done' else 'Nic tu není.') }}</div>{% endfor %}
+  </div>
+</section>
+{% endblock %}

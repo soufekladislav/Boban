@@ -1,0 +1,89 @@
+{% extends "base.html" %}
+{% block title %}Boban · {{ project.name }} – Web Booster{% endblock %}
+{% block body_class %}boban-chat-first{% endblock %}
+{% block content %}
+{% set plan = advisor.work_plan or {} %}
+{% set plan_items = (plan['items'] if plan and plan.get('items') else []) %}
+{% set kpi = progress.kpis if progress else {} %}
+
+<div class="boban-project-bar">
+  <div class="boban-project-title">
+    <span class="eyebrow">AKTIVNÍ WEB</span>
+    <div class="boban-project-name"><h1>{{ project.name }}</h1><a class="muted text-link-soft" href="{{ project.site_url }}" target="_blank" rel="noopener">{{ project.site_url }} ↗</a></div>
+  </div>
+  <div class="boban-project-status">
+    {% if queue.total %}<span class="status-chip working"><i></i> Pracuji · {{ queue.count }}</span>{% else %}<span class="status-chip"><i></i> Boban online</span>{% endif %}
+    {% if advisor.pending %}<a class="status-chip attention" href="{{ url_for('actions', project_id=project.id, view='todo') }}">{{ advisor.pending }} rozpracovaných</a>{% endif %}
+  </div>
+</div>
+
+<div class="smart-mobile-bar"><button class="btn" type="button" data-smart-open aria-controls="boban-context" aria-expanded="false">☷ Pracovní panel <span data-smart-topic-label>· podle tématu</span></button></div>
+<div class="smart-backdrop" data-smart-backdrop hidden></div>
+<div class="boban-home-layout smart-workspace" id="boban-home">
+  <section class="card chat-panel boban-chat-main" id="boban-chat" data-chat-panel>
+    <div class="panel-head boban-head boban-chat-head">
+      <div class="boban-identity">
+        <img src="{{ boban_image_url }}" alt="Boban">
+        <div><strong>Boban</strong><div class="muted small">SEO & growth specialista · {{ 'Specialista' if (strategy.mode or 'specialist')=='specialist' else 'Asistent' }}</div></div>
+      </div>
+      <div class="engine-status">
+        {% if engine_run %}<small class="muted">Engine {{ engine_run.status }}{% if engine_run.model %} · {{ engine_run.model }}{% endif %}</small>{% endif %}
+        <button class="btn tiny-btn" type="button" title="Nová konverzace" data-chat-new data-url="{{ url_for('project_chat_new', project_id=project.id) }}">＋ Nový chat</button>
+      </div>
+    </div>
+
+    <details class="chat-history"><summary>Historie chatů ({{ chat_threads|length }})</summary>
+      <div class="chat-thread-list">
+      {% for t in chat_threads %}
+      <div class="chat-thread-row"><a href="{{ url_for('project_chat_archive', project_id=project.id, thread_id=t.id) }}">{{ t.title }} {% if t.end_message_id is none %}<small>· aktuální</small>{% endif %}</a>
+      <form method="post" action="{{ url_for('project_chat_rename',project_id=project.id,thread_id=t.id) }}"><input aria-label="Přejmenovat konverzaci" name="title" value="{{ t.title }}" maxlength="180" required><button type="submit" title="Přejmenovat" aria-label="Přejmenovat">✓</button></form>
+      {% if t.end_message_id is not none %}<form method="post" action="{{ url_for('project_chat_delete',project_id=project.id,thread_id=t.id) }}" onsubmit="return confirm('Opravdu trvale smazat konverzaci?')"><button type="submit" title="Smazat archivovaný chat" aria-label="Smazat">×</button></form>{% endif %}
+      </div>
+      {% endfor %}</div>
+    </details>
+    <div class="chat-quick-actions" aria-label="Rychlé zadání Bobanovi">
+      {% if not strategy.business_goal %}
+      <button type="button" data-chat-prompt="Pojďme nastavit obchodní cíl tohoto webu. Zeptej se mě jen na to, co opravdu potřebuješ vědět, a pak si cíl ulož." data-chat-send>Nastavit obchodní cíl</button>
+      {% else %}
+      <button type="button" data-chat-prompt="Pokračuj podle plánu. Udělej a připrav všechno, co bezpečně zvládneš sám, a řekni mi jen to, co ode mě potřebuješ." data-chat-send>Pokračuj podle plánu</button>
+      {% endif %}
+      <button type="button" data-chat-prompt="Co jsi od posledně skutečně udělal, co je ověřené a co teď sleduješ?" data-chat-send>Co je hotové?</button>
+      <button type="button" data-chat-prompt="Co uděláš dnes jako první pro obchodní cíl tohoto webu a proč?" data-chat-send>Co uděláš dnes?</button>
+    </div>
+
+    <div class="chat-log boban-chat-log" data-chat-log>
+      <details class="boban-today-card"><summary class="eyebrow">BOBAN DNES · zobrazit doporučení</summary><div class="today-body">
+
+        <div class="advisor-text">{{ advisor.opening }}</div>
+        {% if advisor.suggestions %}<div class="advisor-actions">{% for s in advisor.suggestions[:3] %}<a class="btn small-btn {{ 'primary' if s.primary else '' }}" href="{{ s.url }}">{{ s.label }}</a>{% endfor %}</div>{% endif %}
+      </div></details>
+      {% for m in messages %}
+        <div class="message-wrap {{ 'user' if m.role=='user' else 'assistant' }}" data-chat-message>
+          <div class="bubble {{ 'user' if m.role=='user' else 'assistant' }}" {% if m.role!='user' %}data-rich-chat{% endif %}>{{ m.body }}</div>
+          <time class="chat-message-time" datetime="{{ m.created_at }}" data-chat-created-at="{{ m.created_at }}">{{ m.created_at }}</time>
+          {% if m.role!='user' and m.meta and m.meta.actions %}<div class="chat-actions">{% for a in m.meta.actions %}<a class="btn small-btn {{ 'primary' if a.primary else '' }}" href="{{ a.url }}">{{ a.label }}</a>{% endfor %}</div>{% endif %}
+        </div>
+      {% endfor %}
+      <div data-chat-end></div>
+    </div>
+
+    <form class="chat-form boban-chat-composer" method="post" action="{{ url_for('project_chat', project_id=project.id) }}" data-chat-form>
+      <div class="chat-input-wrap">
+        <textarea name="body" rows="2" placeholder="Napiš Bobanovi, co chceš řešit nebo udělat…" autocomplete="off" data-chat-input></textarea>
+        <small>Enter odešle · Shift+Enter nový řádek</small>
+      </div>
+      <div class="chat-tools">
+        <button class="chat-tool-btn" type="button" data-voice-mic title="Diktovat česky" aria-label="Spustit diktování" aria-pressed="false">🎙</button>
+        <button class="chat-tool-btn" type="button" data-voice-read title="Předčítat odpovědi" aria-label="Zapnout předčítání" aria-pressed="false">🔊</button>
+        <div class="chat-voice-status" role="status" aria-live="polite" data-voice-status></div>
+      </div>
+      <button class="btn primary send-icon" type="submit" title="Odeslat" aria-label="Odeslat zprávu">↑</button>
+    </form>
+  </section>
+
+  <aside class="boban-context-rail smart-context-rail" id="boban-context" aria-label="Bobanův pracovní panel" data-smart-panel>
+    <div class="smart-panel-heading"><div><strong>Pracovní panel</strong><small>Ověřená data k aktuálnímu tématu</small></div><button type="button" class="smart-close" data-smart-close aria-label="Zavřít pracovní panel">×</button></div>
+    <div data-smart-card-slot>{% include 'partials/smart_cards.html' %}</div>
+  </aside>
+</div>
+{% endblock %}

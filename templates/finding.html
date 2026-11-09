@@ -1,0 +1,45 @@
+{% extends "base.html" %}
+{% block title %}{{ finding.title }} – {{ project.name }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><a class="back" href="{{ url_for('seo', project_id=project.id) }}">← SEO audit</a><h1>{{ finding.title }}</h1><p class="lead-sm">{{ finding.detail }}</p>{% if knowledge_slug %}<a class="text-link" href="{{ url_for('knowledge_article', project_id=project.id, slug=knowledge_slug) }}">ⓘ Vysvětlit, co to znamená →</a>{% endif %}</div>
+  <span class="kind-badge {{ finding.kind }} big">{{ {'error':'chyba','warning':'varování','opportunity':'příležitost'}.get(finding.kind,finding.kind) }}</span>
+</div>
+
+{% if actionable %}
+<div class="info-block wide-info"><div><b>Tento typ umím řešit</b><span>Vyber stránky a připravím konkrétní návrhy. Nic nepublikuji automaticky: každý návrh můžeš upravit a teprve potom ho schválíš k publikaci přes Fresh Core.</span></div></div>
+{% else %}
+<div class="info-block wide-info neutral-info"><div><b>Zatím bez bezpečného automatického zápisu</b><span>Tento nález eviduji v auditu, ale nevytvářím z něj úkol „udělej si sám“. Můžeš ho zkontrolovat, odložit na 30 dní nebo skrýt. Jakmile bude mít Fresh Core bezpečný zápis pro tento typ změny, přesunu ho do automatických oprav.</span></div></div>
+{% endif %}
+
+<div class="card table-card">
+  <form method="post" id="finding-form">
+    <input type="hidden" name="code" value="{{ finding.code }}"><input type="hidden" name="source" value="{{ finding.source }}">
+    <div class="panel-head selection-toolbar">
+      <div><strong>{{ 'Konkrétní obrázky' if finding.code in ['missing_alt','image_alt_missing'] else 'Konkrétní URL' }}</strong><div class="muted small">Označ jednu, více nebo všechny položky.</div></div>
+      <div class="selection-actions"><label class="select-all"><input type="checkbox" data-select-all="#finding-form" class="js-select-all"> Vybrat vše</label>
+        {% if actionable %}<button class="btn primary" type="submit" formaction="{{ url_for('seo_ai_fix', project_id=project.id) }}" name="mode" value="draft">Připravit návrhy</button>{% endif %}
+        <button class="btn subtle" type="submit" formaction="{{ url_for('seo_issue_state', project_id=project.id) }}" name="issue_action" value="snooze">Odložit 30 dní</button>
+        <button class="btn subtle danger-text" type="submit" formaction="{{ url_for('seo_issue_state', project_id=project.id) }}" name="issue_action" value="dismiss" onclick="return confirm('Skrýt vybrané nálezy i při dalších crawlech? Kdykoliv je můžeš obnovit.');">Zahodit</button>
+      </div>
+    </div>
+    <div class="issue-table">
+      {% for i in issues %}
+      <div class="issue-table-row {{ 'image-issue-row' if finding.code in ['missing_alt','image_alt_missing'] else '' }}">
+        <div><input class="js-row-check" type="checkbox" name="issue_ids" value="{{ i.id }}" aria-label="Vybrat {{ i.target_url }}"></div>
+        {% if finding.code in ['missing_alt','image_alt_missing'] %}
+        <div class="image-issue-main">
+          {% if i.context.image_url %}<img class="issue-image-thumb" src="{{ i.context.image_url }}" alt="Náhled obrázku">{% endif %}
+          <div><b>{{ i.context.filename or 'Obrázek bez ALT' }}</b><div class="muted small">Na stránce: {{ i.context.page_url or i.target_url }}</div><div class="muted small">{{ 'Fresh Core attachment ' ~ i.entity_id if i.code=='image_alt_missing' else 'Crawler – při přípravě návrhu přiřadím k médiu ve WordPressu' }}</div></div>
+        </div>
+        {% else %}
+        <div><b>{{ i.target_url or ('WordPress ID ' ~ i.entity_id) }}</b><div class="muted small">WP ID {{ i.entity_id or '—' }} • {{ i.source }} • {{ i.severity }}</div></div>
+        {% endif %}
+        <div class="actions compact">{% if i.target_url %}<a class="btn small-btn" href="{{ i.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
+      </div>
+      {% endfor %}
+    </div>
+    <div class="sticky-selection-bar"><span><b data-selected-count>0</b> vybráno</span>{% if actionable %}<button class="btn primary" type="submit" formaction="{{ url_for('seo_ai_fix', project_id=project.id) }}" name="mode" value="draft">Boban připraví návrhy</button>{% endif %}<button class="btn subtle" type="submit" formaction="{{ url_for('seo_issue_state', project_id=project.id) }}" name="issue_action" value="snooze">Odložit</button><button class="btn subtle danger-text" type="submit" formaction="{{ url_for('seo_issue_state', project_id=project.id) }}" name="issue_action" value="dismiss">Zahodit</button></div>
+  </form>
+</div>
+{% endblock %}

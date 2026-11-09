@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}{{ article.title }} – Web Booster{% endblock %}
+{% block content %}
+<div class="page-head knowledge-head">
+  <div>
+    <a class="back" href="{{ url_for('knowledge', project_id=project.id) }}">← SEO poradna</a>
+    <span class="eyebrow">{{ article.category }}</span>
+    <h1>{{ article.title }}</h1>
+    <p class="lead-sm">{{ article.summary }}</p>
+  </div>
+  <a class="btn" href="{{ url_for('seo', project_id=project.id) }}">Otevřít audit</a>
+</div>
+
+<div class="knowledge-layout">
+  <article class="card knowledge-article">
+    {% for heading, text in article.sections %}
+    <section>
+      <h2>{{ heading }}</h2>
+      <p>{{ text }}</p>
+    </section>
+    {% endfor %}
+  </article>
+  <aside class="right-stack">
+    <section class="card side-card">
+      <div class="info-title"><span class="info-dot">i</span><strong>Bobanův princip</strong></div>
+      <p class="muted small">Nejdřív zkontroluji data, potom doporučím změnu, nechám tě ji upravit a až po schválení ji publikuji. Výsledek pak ověřím a pokud máme analytiku, změřím dopad.</p>
+    </section>
+    <section class="card side-card">
+      <strong>Oficiální zdroje</strong>
+      <div class="source-list">
+        {% for label, url in article.sources %}<a href="{{ url }}" target="_blank" rel="noopener">{{ label }} ↗</a>{% endfor %}
+      </div>
+      <small class="muted">Zdroje a doporučení ověřuj podle data aktualizace a aktuálních pravidel poskytovatelů.</small>
+    </section>
+  </aside>
+</div>
+{% endblock %}

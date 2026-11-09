@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Přidat web – Web Booster{% endblock %}
+{% block content %}
+<div class="narrow-page">
+  <a class="back" href="{{ url_for('dashboard') }}">← Zpět na weby</a>
+  <div class="card form-card">
+    <span class="eyebrow">NOVÝ WEB</span>
+    <h1>Připoj web k Bobanovi</h1>
+    <p class="muted">Fresh Core je bezpečný most mezi WordPressem a Web Boosterem. Manifest slouží pro čtení dat; write bridge se zapíná zvlášť až pro schválené změny.</p>
+    <form method="post" class="form">
+      <label>Název projektu<input name="name" placeholder="ČajnaCars.cz" required></label>
+      <label>URL webu<input name="site_url" placeholder="https://cajnacars.cz" required></label>
+      <label>Fresh Core Connector Manifest URL
+        <input name="core_manifest_url" placeholder="https://web.cz/wp-content/uploads/fresh-core-connector/.../manifest.json">
+        <small>Najdeš ji ve WordPressu v Nástroje → Fresh Core.</small>
+      </label>
+      <div class="info-block"><div><b>Co se stane?</b><span>Web Booster načte technická a SEO data, ale bez write bridge nemůže na webu nic měnit.</span></div></div>
+      <button class="btn primary wide">Vytvořit projekt</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

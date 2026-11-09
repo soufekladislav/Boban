@@ -1,0 +1,166 @@
+{% extends 'base.html' %}
+{% block title %}Statistiky · {{ project.name }} · Boban{% endblock %}
+{% block content %}
+{% set ga=latest.get('ga4',{}) %}{% set sc=latest.get('search_console',{}) %}
+{% set ext=ga4.get('extended_reports') or {} %}
+{% set totals=ga4.get('current_total') or {} %}
+{% set org=ga4.get('current_organic') or {} %}
+{% set gsc_tot=gsc.get('current') or {} %}
+{% set itemrows=ext.get('items') or [] %}
+{% set eventrows=ext.get('commerce_events') or [] %}
+{% set lead_mode=business_type=='lead' %}
+{% set lead_form=namespace(forms=none,leads=none) %}
+{% if ext.get('commerce_events') is not none and not ext.get('commerce_events_error') %}{% for e in eventrows %}{% if e.get('eventName')=='form_submit' %}{% set lead_form.forms=e.get('eventCount')|int %}{% elif e.get('eventName')=='generate_lead' %}{% set lead_form.leads=e.get('eventCount')|int %}{% endif %}{% endfor %}{% endif %}
+{% set active_events=namespace(views=none,carts=none,checkouts=none,purchases=none) %}
+{% if ext.get('commerce_events') is not none and not ext.get('commerce_events_error') %}
+  {% for e in eventrows %}
+    {% if e.get('eventName')=='view_item' %}{% set active_events.views=e.get('eventCount')|int %}{% endif %}
+    {% if e.get('eventName')=='add_to_cart' %}{% set active_events.carts=e.get('eventCount')|int %}{% endif %}
+    {% if e.get('eventName')=='begin_checkout' %}{% set active_events.checkouts=e.get('eventCount')|int %}{% endif %}
+    {% if e.get('eventName')=='purchase' %}{% set active_events.purchases=e.get('eventCount')|int %}{% endif %}
+  {% endfor %}
+{% endif %}
+<section class="stat-page stat-commerce">
+  <header class="stat-heading">
+    <span class="eyebrow">BOBAN / OBCHODNÍ ANALYTIKA</span>
+    <h1>Statistiky</h1>
+    <p class="muted">Jedno místo pro získávání zákazníků a poptávek. Čísla pocházejí z uložených dat zdrojových platforem. Nedostupná data nejsou nulový výsledek.</p>
+    <div class="stat-links" aria-label="Zdrojové platformy">
+      <a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener noreferrer">GA4 <span aria-hidden="true">↗</span></a>
+      <a href="https://search.google.com/search-console" target="_blank" rel="noopener noreferrer">Search Console ↗</a>
+      <a href="https://merchants.google.com/" target="_blank" rel="noopener noreferrer">Google Merchant ↗</a>
+      <a href="https://business.facebook.com/commerce/" target="_blank" rel="noopener noreferrer">Meta Commerce ↗</a>
+      <a href="https://www.sklik.cz/" target="_blank" rel="noopener noreferrer">Sklik ↗</a>
+      <a href="https://www.heureka.cz/" target="_blank" rel="noopener noreferrer">Heureka ↗</a>
+    </div>
+  </header>
+
+  <nav class="stat-subnav" aria-label="Části statistiky">
+    <a href="#stat-overview">Přehled</a><a href="#stat-funnel">Obchodní trychtýř</a>
+    <a href="#stat-channels">Kanály</a><a href="#stat-demand">Vyhledávání</a>
+    <a href="#stat-products">Produkty / stránky</a><a href="#stat-platforms">Platformy a měření</a>
+  </nav>
+
+  <section class="stat-quality" aria-label="Kvalita a čerstvost analytických dat">
+    <div class="stat-quality-intro"><strong>Spolehlivost dat</strong><span>Každé číslo má zdroj a datum. Starší reporty jsou označené.</span></div>
+    <div class="stat-quality-grid">
+      {% for check in data_quality %}
+      <div class="stat-quality-item stat-quality-{{ check.status }}"><div><strong>{{ check.source }}</strong><span class="stat-quality-state">{{ 'Aktuální' if check.status=='fresh' else 'Zastaralé' if check.status=='stale' else 'Neověřené' }}</span></div><small>{{ check.message }}</small>
+      {% set key='ga4' if check.source=='GA4' else 'search_console' %}
+      {% if sync_health.get(key) and sync_health[key].status=='failed' %}<small class="stat-quality-error">Poslední běh selhal. {{ sync_health[key].get('error','') }} · {{ sync_health[key].finished_at }}</small>{% endif %}</div>
+      {% endfor %}
+    </div>
+    <details class="stat-detail"><summary>Jak pracujeme s chybějícími údaji</summary><p>Chybějící měření je „—“, nikoli nula. GA4 události nejsou unikátní lidé ani potvrzené objednávky. Search Console může mít několikadenní zpoždění. Poptávky a objednávky vyžadují vlastní ověřený zdroj.</p></details>
+  </section>
+  <section id="stat-overview" class="card stat-card">
+    <div class="stat-card-heading"><div><span class="eyebrow">MANAŽERSKÝ PŘEHLED</span><h2>Zákazníci a obchod</h2></div><span class="status-chip">{% if ga %}{{ ga.period_start }} – {{ ga.period_end }}{% else %}GA4 bez dat{% endif %}</span></div>
+    <p class="stat-business-mode">Primární obchodní model: <strong>{{ 'Poptávkový web' if lead_mode else 'E-shop / přímý prodej' }}</strong> · dle nastaveného primárního cíle projektu</p>
+    {% if data_quality and data_quality[0].status == 'stale' %}<p class="stat-warning"><strong>Historický přehled:</strong> GA4 data nejsou aktuální. Čísla níže se vztahují výhradně k uvedenému období a nelze je interpretovat jako dnešní výkon.</p>{% endif %}
+    <div class="stat-kpis">
+      <div class="stat-kpi"><small>Návštěvy webu (GA4 relace)</small><strong>{{ totals.get('sessions')|int if ga and totals.get('sessions') is not none else '—' }}</strong><span><a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener">GA4 ↗</a></span></div>
+      <div class="stat-kpi"><small>Organické návštěvy</small><strong>{{ org.get('sessions')|int if ga and org.get('sessions') is not none else '—' }}</strong><span>GA4 / Organic Search</span></div>
+      <div class="stat-kpi"><small>{{ "Objednávky (doplňkově)" if lead_mode else "Skutečné objednávky" }}</small><strong>{{ outcomes.orders if outcomes.available else '—' }}</strong><span>{% if outcomes.available %}Evidované potvrzené výsledky{% else %}Chybí čtecí zdroj objednávek{% endif %}</span></div>
+      <div class="stat-kpi"><small>{{ "Skutečné poptávky" if lead_mode else "Poptávky (doplňkově)" }}</small><strong>{{ outcomes.leads if outcomes.available else '—' }}</strong><span>{% if outcomes.available %}Evidované potvrzené výsledky{% else %}Chybí evidence poptávek{% endif %}</span></div>
+    </div>
+    <div class="stat-period-compare">{% if session_delta is not none %}<strong>{{ '+' if session_delta>0 else '' }}{{ session_delta }} %</strong><span>relace proti předchozímu stejně dlouhému období</span>{% else %}<span>Srovnání s minulým obdobím zatím není dostupné</span>{% endif %}</div>
+    <div class="stat-visual-title"><div><strong>Vývoj návštěvnosti</strong><small>Denní relace z GA4 · bez predikce</small></div><a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener noreferrer">Detail v GA4 ↗</a></div>
+    {% if trend_chart.available %}
+      <div class="stat-trend" role="img" aria-label="Vývoj počtu relací po dnech z Google Analytics, {{ trend_chart.n_days }} dní. Nejvyšší denní hodnota {{ trend_chart.max_value }} relací.">
+        <svg viewBox="0 0 880 170" preserveAspectRatio="none" aria-hidden="true" focusable="false">
+          <line x1="14" y1="156" x2="866" y2="156" stroke="#d9e2d7" stroke-width="1"/>
+          <line x1="14" y1="85" x2="866" y2="85" stroke="#e6ebe4" stroke-width="1" stroke-dasharray="6 5"/>
+          <polyline points="{{ trend_chart.points }}" fill="none" stroke="#598338" stroke-width="3.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke"/>
+        </svg>
+      </div>
+      <div class="stat-chart-axis"><span>{{ trend_chart.labels[0][6:8] }}.{{ trend_chart.labels[0][4:6] }}.{{ trend_chart.labels[0][:4] }}</span><span>Maximum {{ trend_chart.max_value }} relací/den</span><span>{{ trend_chart.labels[1][6:8] }}.{{ trend_chart.labels[1][4:6] }}.{{ trend_chart.labels[1][:4] }}</span></div>
+    {% else %}<p class="stat-note">Pro časový graf chybí denní hodnoty GA4. Spusť analytickou synchronizaci.</p>{% endif %}
+    <p class="stat-note">Objednávky a poptávky nelze nahrazovat počtem událostí z GA4. Primárním zdrojem skutečných objednávek bude WooCommerce; u poptávek potvrzený formulář/CRM. {% if ga %}GA4 naposledy načteno {{ ga.captured_at }}.{% endif %}</p>
+    {% if outcomes.get('unclassified_test_rows') %}<p class="stat-warning">{{ outcomes.unclassified_test_rows }} obchodních záznamů nemá určený testovací stav; do skutečných výsledků se nezapočítávají.</p>{% endif %}
+  </section>
+
+  <section id="stat-funnel" class="card stat-card">
+    <div class="stat-card-heading"><div><span class="eyebrow">OD NÁVŠTĚVY K ZÁKAZNÍKOVI</span><h2>Obchodní trychtýř</h2></div><a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener noreferrer">Zkontrolovat v GA4 ↗</a></div>
+    <p class="stat-funnel-explain">Jednotlivé kroky používají různé jednotky (relace, události, potvrzené obchodní záznamy). Šířka představuje stav měření, nikoliv míru konverze. Poměry doplníme až po sjednocení měření návštěvníků a objednávek.</p>
+    <div class="stat-funnel-visual" aria-label="Přehled měřených kroků obchodní cesty">
+    {% for step in funnel_steps %}
+      <div class="stat-funnel-stage {{ 'is-unmeasured' if not step.measured else '' }}" style="--step-indent:{{ (loop.index0 * 2.5)|int }}%">
+        <div class="stat-funnel-stage-content"><span class="stat-step-index">{{ '%02d'|format(loop.index) }}</span><div><strong>{{ step.label }}</strong><small>{{ step.source }}</small></div><b>{{ step.value if step.measured else '—' }}</b></div>
+      </div>
+    {% endfor %}
+    </div>
+    {% if not lead_mode %}<div class="stat-two-columns">
+      <div class="stat-callout"><strong>Opuštěný košík</strong><p>— · skutečné opuštěné košíky vyžadují identifikaci košíku, čas poslední aktivity a potvrzení, že z něj nevznikla objednávka. Prostý rozdíl <code>add_to_cart − purchase</code> není spolehlivá statistika.</p><small>Stav: potřebuje samostatné Woo/checkout měření</small></div>
+      <div class="stat-callout"><strong>Opuštěná pokladna</strong><p>— · pro přesný počet dokončených a nedokončených checkoutů potřebujeme deduplikované nákupní relace nebo odpovídající události Woo/GA4.</p><small>Stav: nyní pouze události, ne potvrzené unikátní nákupní cesty</small></div>
+    </div>{% else %}<p class="stat-note">U poptávkových webů budeme měřit nedokončené formuláře až po doplnění bezpečného a anonymního měření zahájení a odeslání formuláře.</p>{% endif %}
+    <details class="stat-detail"><summary>Jak číst trychtýř a poptávky</summary><p>Jednotlivé počty GA4 událostí nejsou automaticky počtem zákazníků; jedna relace může vytvořit více událostí. U firemních webů se sleduje stránka služby → odeslání formuláře / kontakt → potvrzená poptávka → zakázka. Událost kliknutí na telefon sama nedokládá uskutečněný hovor.</p></details>
+  </section>
+
+  <div class="stat-two-columns">
+    <section id="stat-channels" class="card stat-card">
+      <div class="stat-card-heading"><div><span class="eyebrow">JAK NÁS LIDÉ NACHÁZEJÍ</span><h2>Výkon kanálů</h2></div><a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener">GA4 ↗</a></div>
+      {% if ext.get('channels') %}
+      {% set max_channel=(ext['channels']|map(attribute='sessions')|map('int')|max) if ext['channels'] else 0 %}
+      <div class="stat-bar-chart" aria-label="Relace dle marketingových kanálů">
+        {% for row in ext['channels'][:7] %}
+        {% set bar_value=row.get('sessions',0)|int %}
+        <div class="stat-bar-row"><span title="{{ row.get('sessionDefaultChannelGroup') or 'Neznámý' }}">{{ row.get('sessionDefaultChannelGroup') or 'Neznámý' }}</span><div class="stat-bar-track"><div class="stat-bar-fill" style="width:{{ ((bar_value / max_channel * 100) if max_channel else 0)|round(1) }}%"></div></div><b>{{ bar_value }}</b></div>
+        {% endfor %}
+      </div>
+      <details class="stat-detail"><summary>Podrobná tabulka kanálů</summary><div class="stat-table-wrap"><table class="stat-table"><thead><tr><th>Kanál</th><th>Relace</th><th>Uživatelé</th><th>Zapojení</th></tr></thead><tbody>
+      {% for row in ext['channels'][:25] %}<tr><td>{{ row.get('sessionDefaultChannelGroup') or '—' }}</td><td>{{ row.get('sessions',0)|int }}</td><td>{{ row.get('activeUsers',0)|int }}</td><td>{{ row.get('engagedSessions',0)|int }}</td></tr>{% endfor %}
+      </tbody></table></div></details>{% else %}<p class="stat-note">Rozpad návštěv podle kanálů zatím není dostupný. {% if ext.get('channels_error') %}{{ ext.channels_error }}{% endif %}</p>{% endif %}
+      {% if ext.get('sources') %}<details class="stat-detail"><summary>Zdroj / médium ({{ ext['sources']|length }})</summary><div class="stat-table-wrap"><table class="stat-table"><thead><tr><th>Zdroj</th><th>Relace</th></tr></thead><tbody>{% for r in ext['sources'][:30] %}<tr><td>{{ r.get('sessionSourceMedium','—') }}</td><td>{{ r.get('sessions',0)|int }}</td></tr>{% endfor %}</tbody></table></div></details>{% endif %}
+    </section>
+    <section id="stat-demand" class="card stat-card">
+      <div class="stat-card-heading"><div><span class="eyebrow">CO LIDÉ HLEDAJÍ</span><h2>Google vyhledávání</h2></div><a href="https://search.google.com/search-console" target="_blank" rel="noopener">Search Console ↗</a></div>
+      <div class="stat-metrics"><div><small>Kliknutí</small><strong>{{ gsc_tot.get('clicks')|int if sc and gsc_tot.get('clicks') is not none else '—' }}</strong></div><div><small>Zobrazení</small><strong>{{ gsc_tot.get('impressions')|int if sc and gsc_tot.get('impressions') is not none else '—' }}</strong></div><div><small>CTR</small><strong>{{ '%.1f%%'|format((gsc_tot.get('ctr')|float)*100) if sc and gsc_tot.get('ctr') is not none else '—' }}</strong></div><div><small>Průměrná pozice</small><strong>{{ '%.1f'|format(gsc_tot.get('position')|float) if sc and gsc_tot.get('position') is not none else '—' }}</strong></div></div>
+      {% if gsc.get('top_queries') %}
+      {% set max_impr=(gsc.top_queries|map(attribute='impressions')|map('int')|max) if gsc.top_queries else 0 %}
+      <div class="stat-bar-chart stat-demand-bars" aria-label="Vyhledávací dotazy podle počtu zobrazení">
+      {% for r in gsc.top_queries[:6] %}{% set impressions=r.get('impressions',0)|int %}
+       <div class="stat-bar-row"><span title="{{ (r.get('keys') or ['—'])[0] }}">{{ (r.get('keys') or ['—'])[0] }}</span><div class="stat-bar-track"><div class="stat-bar-fill" style="width:{{ ((impressions / max_impr * 100) if max_impr else 0)|round(1) }}%"></div></div><b>{{ impressions }}</b></div>
+      {% endfor %}</div>
+      <details class="stat-detail"><summary>Nejčastější dotazy</summary><div class="stat-table-wrap"><table class="stat-table"><thead><tr><th>Dotaz</th><th>Kliknutí</th><th>Imprese</th></tr></thead><tbody>{% for r in gsc.get('top_queries',[])[:20] %}<tr><td>{{ (r.get('keys') or ['—'])[0] }}</td><td>{{ r.get('clicks',0)|int }}</td><td>{{ r.get('impressions',0)|int }}</td></tr>{% endfor %}</tbody></table></div></details>{% else %}<p class="stat-note">Seznam dotazů není dostupný.</p>{% endif %}
+      <p class="muted small">Dotazy ze Search Console nelze přímo přiřadit ke konkrétní objednávce.</p>
+    </section>
+  </div>
+
+  <div class="stat-two-columns">
+    <section id="stat-products" class="card stat-card">
+      <div class="stat-card-heading"><div><span class="eyebrow">CO ZÁKAZNÍKY ZAJÍMÁ</span><h2>Produkty a sortiment</h2></div><a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener">GA4 ↗</a></div>
+      {% if itemrows %}<div class="stat-table-wrap"><table class="stat-table"><thead><tr><th>Produkt</th><th>Zobrazení</th><th>Do košíku</th><th>Zakoupené kusy</th></tr></thead><tbody>{% for r in itemrows[:30] %}<tr><td>{{ r.get('itemName') or r.get('itemId') or '—' }}</td><td>{{ r.get('itemsViewed',0)|int }}</td><td>{{ r.get('itemsAddedToCart',0)|int }}</td><td>{{ r.get('itemsPurchased',0)|int }}</td></tr>{% endfor %}</tbody></table></div>{% else %}<p class="stat-note">Produktové události zatím nejsou dostupné. Zkontrolovat GA4 e-commerce implementaci. {% if ext.get('items_error') %}{{ ext.items_error }}{% endif %}</p>{% endif %}
+      <details class="stat-detail"><summary>Stav katalogu Fresh Core</summary><p>{{ catalog.cached_products }} uložených hlavních produktů; {{ catalog.get('synced_count',0) }} zpracovaných položek. Nejde o prodané kusy.</p></details>
+    </section>
+    <section class="card stat-card">
+      <div class="stat-card-heading"><div><span class="eyebrow">OBSAH A VSTUPNÍ STRÁNKY</span><h2>Stránky, které přivádějí lidi</h2></div><a href="https://analytics.google.com/analytics/web/" target="_blank" rel="noopener">GA4 ↗</a></div>
+      <p class="muted small">Párování podle URL, nikoliv atribuce dotazu k objednávce. Data GA4 a Search Console mohou pokrývat odlišně ukončená období. Typ stránky je orientační klasifikace URL.</p>
+      {% if joined_pages %}<div class="stat-table-wrap"><table class="stat-table"><thead><tr><th>Stránka</th><th>Typ</th><th>GA4 relace</th><th>GSC kliknutí</th></tr></thead><tbody>
+      {% for r in joined_pages[:25] %}<tr><td class="stat-page-path"><a href="{{ (project.site_url or '').rstrip('/') }}{{ r.path }}" target="_blank" rel="noopener noreferrer">{{ r.path }}</a></td><td>{{ {'product':'Produkt','category':'Kategorie','article':'Článek','service':'Služba','contact':'Kontakt','other':'Ostatní'}[r.type] }}</td><td>{{ r.sessions if r.sessions is not none else '—' }}</td><td>{{ r.clicks if r.clicks is not none else '—' }}</td></tr>{% endfor %}
+      </tbody></table></div>{% else %}<p class="stat-note">Není dostupné společné zobrazení GA4 a Search Console podle URL.</p>{% endif %}
+      <details class="stat-detail"><summary>Skutečné kombinace dotaz + stránka ze Search Console</summary>
+      <div class="stat-table-wrap"><table class="stat-table"><thead><tr><th>Dotaz</th><th>Stránka</th><th>Kliknutí</th></tr></thead><tbody>
+      {% for r in query_pages %}<tr><td>{{ r.query }}</td><td class="stat-page-path">{{ r.path }}</td><td>{{ r.clicks }}</td></tr>{% else %}<tr><td colspan="3">Data o kombinacích dotazů a stránek zatím nejsou dostupná.</td></tr>{% endfor %}
+      </tbody></table></div></details>
+    </section>
+  </div>
+
+  <section id="stat-platforms" class="card stat-card">
+    <span class="eyebrow">KATALOGY / KONEKTORY / DATOVÁ KVALITA</span><h2>Co přinášejí jednotlivé platformy</h2>
+    <p class="muted small">Stav napojení ≠ výkon. Kde API výkonnostní statistiky zatím neposkytuje nebo je nestahujeme, ukazujeme „Neměřeno“. Pro detail otevři původní platformu.</p>
+    {% set platform_list=[('ga4','Google Analytics 4','https://analytics.google.com/analytics/web/','Relace, kanály, produktové události'),('search_console','Search Console','https://search.google.com/search-console','Dotazy, kliknutí, zobrazení a pozice'),('merchant_center','Google Merchant','https://merchants.google.com/','Schválení nabídek; výkon podle dostupného Merchant reportu'),('meta_catalog','Meta Commerce','https://business.facebook.com/commerce/','Produkty v katalogu a dostupná diagnostika'),('zbozi_fenix','Seznam Nákupy / Sklik','https://www.sklik.cz/','Feed a dostupné statistiky platformy'),('heureka','Heureka','https://www.heureka.cz/','Feed, párování a dostupný výkon')] %}
+    <div class="stat-platform-grid">
+      {% for code,label,link,detail in platform_list %}
+      {% set pc=platforms.get(code) or (platforms.get('meta') if code=='meta_catalog' else none) or {} %}
+      <div class="stat-platform-card"><div class="stat-platform-top"><strong>{{ label }}</strong><a href="{{ link }}" target="_blank" rel="noopener noreferrer" aria-label="Otevřít {{ label }}">Otevřít ↗</a></div>
+      <p>{{ detail }}</p>
+      {% if feed_counts.get(code) %}<p><strong>{{ feed_counts[code].count }}</strong> nabídek ve zveřejněném feedu · {{ feed_counts[code].generated_at or 'datum neznámé' }}</p>{% endif %}
+      {% if code=='merchant_center' and pc.get('report') %}<p><strong>{{ pc.report.clicks|int }} prokliků / {{ pc.report.impressions|int }} zobrazení</strong> · bezplatné produktové výpisy · {{ pc.report.period_start }}–{{ pc.report.period_end }}{% if not pc.report.complete %} (neúplný výpis){% endif %}</p>{% endif %}
+      {% if pc.get('report_error') %}<p class="stat-warning">Poslední pokus o report: {{ pc.report_error }}</p>{% endif %}
+      <span class="stat-source-status">{% if code in latest %}Data načtena: {{ latest[code].captured_at }}{% elif code in analytical_runs %}Poslední synchronizace {{ analytical_runs[code].finished_at }}{% elif pc.get('status') %}Konektor: {{ pc.status }} · {% if pc.get('has_performance') %}report uložen{% else %}výkon neměřen{% endif %}{% else %}Výkonnostní data nejsou dostupná{% endif %}</span></div>
+      {% endfor %}
+    </div>
+    <details class="stat-detail"><summary>Stav všech připojených služeb a jejich poslední běhy</summary><div class="stat-source-grid">{% for source in sources %}<div class="stat-source"><strong>{{ source.provider|replace('_',' ')|title }}</strong><span>{{ source.status }}</span><small>{% if source.provider in latest %}Data: {{ latest[source.provider].captured_at }}{% elif source.last_job %}Běh: {{ source.last_job.finished_at or '—' }} · {{ source.last_job.status }}{% else %}Bez uložených analytických údajů{% endif %}</small></div>{% else %}<p class="stat-note">Nejsou evidovány žádné integrace.</p>{% endfor %}</div></details>
+    <p class="stat-note">Důvěryhodnost dat: {% if ga %}GA4 poslední snapshot {{ ga.captured_at }}{% else %}GA4 chybí{% endif %}; {% if sc %}Search Console {{ sc.captured_at }}{% else %}Search Console chybí{% endif %}. GTM je správce měřicích tagů, nikoliv zdroj objednávek. Pro skutečnou míru opuštění košíku potřebujeme doplnit měření košíků, ne pouze události.</p>
+  </section>
+</section>
+{% endblock %}

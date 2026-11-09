@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Web Booster – Boban{% endblock %}
+{% block body_class %}public-page{% endblock %}
+{% block content %}
+<section class="login-hero">
+  <div class="public-topline">
+    <a href="https://www.freshcrackers.cz/" target="_blank" rel="noopener" class="public-brand">
+      <img src="{{ fresh_logo_url }}" alt="Fresh Crackers"><span>Web Booster</span>
+    </a>
+    <a href="{{ url_for('register') }}" class="pink-link">Vytvořit účet</a>
+  </div>
+  <div class="login-grid">
+    <div class="login-copy">
+      <span class="eyebrow light"><i></i> FRESH AI ECOSYSTEM</span>
+      <h1>Boban hlídá,<br><em>co web brzdí.</em></h1>
+      <h2>SEO, obsah, vyhledávání a později i PPC – srozumitelně a s měřením dopadu.</h2>
+      <p>Web Booster propojí data z webu, vyhledávačů a analytiky. Boban vysvětlí, co je problém, navrhne opravu a po schválení ji může přes Fresh Core také provést.</p>
+
+      <div class="login-card">
+        <h3>Přihlášení</h3>
+        {% with messages = get_flashed_messages(with_categories=true) %}
+          {% for category, message in messages %}<div class="flash compact {{ category }}">{{ message }}</div>{% endfor %}
+        {% endwith %}
+        <form method="post" action="{{ url_for('login') }}" class="login-form">
+          <label>E-mail<input type="email" name="email" autocomplete="email" required></label>
+          <label>Heslo<input type="password" name="password" autocomplete="current-password" required></label>
+          <button class="btn primary green">Přihlásit se</button>
+        </form>
+        <div class="login-links"><span>Nemáš účet?</span> <a href="{{ url_for('register') }}">Vytvořit účet</a></div>
+      </div>
+    </div>
+    <div class="boban-visual">
+      <div class="boban-frame">
+        <img src="{{ boban_image_url }}" alt="Boban – SEO specialista Fresh AI">
+      </div>
+      <div class="boban-tag"><span class="live-dot"></span><strong>Boban</strong><small>SEO & growth specialista</small></div>
+    </div>
+  </div>
+  <div class="public-created">Created by <a href="https://www.freshcrackers.cz/" target="_blank" rel="noopener">Fresh Crackers</a></div>
+</section>
+{% endblock %}
