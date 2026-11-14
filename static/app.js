@@ -369,11 +369,17 @@
         const labels={core:'Fresh Core',search_console:'Search Console',ga4:'GA4',gtm:'GTM'};
         const good=states.filter(x=>x.status==='ok');
         const problems=states.filter(x=>x.status==='failed' || x.status==='needs_setup');
+        const disconnected=states.filter(x=>x.status==='not_connected');
+        const active=states.length-disconnected.length;
         const last=states.reduce((out,x)=>!out || x.checked_at>out ? x.checked_at:out,'');
-        let message=states.length ? 'Ověřeno '+good.length+'/'+states.length+' konektorů.' :
+        let message=states.length ? 'Ověřeno '+good.length+'/'+active+' aktivních konektorů.' :
           'Konektory zatím nemají ověřený živý stav.';
+        if (disconnected.length) message+=' Nepřipojeno: '+disconnected.length+'.';
         if (problems.length) message+=' Nutná kontrola: '+problems.map(x=>labels[x.provider]||x.provider).join(', ')+'.';
-        if (last) message+=' Poslední kontrola: '+last.replace('T',' ')+'.';
+        if (last) {
+          const d=new Date(last);
+          message+=' Poslední kontrola: '+(Number.isNaN(d.getTime())?last:d.toLocaleString('cs-CZ'))+'.';
+        }
         document.querySelectorAll('[data-heartbeat-summary]').forEach(el=>el.textContent=message);
       }
       if (data.daily_sync) {
@@ -383,8 +389,10 @@
         const completed=runs.filter(r=>r.status==='completed').length;
         const errors=runs.filter(r=>r.status==='failed');
         const inProgress=runs.filter(r=>r.status==='running');
+        const requested=runs.filter(r=>r.status==='requested');
         let summary = !runs.length ? 'Dnes zatím nejsou evidovány běhy (pravidelný start od 05:00).' :
           'Dnes hotovo '+completed+'/'+runs.length+' zdrojů.';
+        if (requested.length) summary += ' Ve frontě: '+requested.map(r=>providerNames[r.provider]||r.provider).join(', ')+'.';
         if (inProgress.length) summary += ' Zpracovávám: '+inProgress.map(r=>providerNames[r.provider]||r.provider).join(', ')+'.';
         if (errors.length) summary += ' Chyba: '+errors.map(r=>providerNames[r.provider]||r.provider).join(', ')+'. Boban bude opakovat podle plánu.';
         document.querySelectorAll('[data-sync-summary]').forEach(el=>el.textContent=summary);
