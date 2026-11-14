@@ -163,7 +163,16 @@ def stats(conn, project_id=None):
         "SELECT COUNT(*) AS n FROM jobs" + recent_where,
         tuple(recent_args)
     ).fetchone()["n"] or 0)
-    return {"counts": counts,
+    running_where="WHERE status='running'"
+    running_args=[]
+    if project_id is not None:
+        running_where += " AND project_id=?"
+        running_args.append(int(project_id))
+    running_ids=[int(r["id"]) for r in conn.execute(
+        "SELECT id FROM jobs " + running_where + " ORDER BY id DESC LIMIT 30",
+        tuple(running_args)
+    ).fetchall()]
+    return {"counts": counts, "running_job_ids":running_ids,
             "active": sum(counts.get(s, 0) for s in ACTIVE),
             "completed_15m": recent,
             "last_completed": summary["last_completed"],
@@ -185,7 +194,12 @@ def movement_state(summary, worker, now=None, stale_after=180):
         return {"status": "unconfirmed", "message": "Nemám čerstvé potvrzení běhu plánovače. Fronta může čekat na cron.",
                 "cron_confirmed": False}
     if summary.get("counts", {}).get("running", 0):
-        if worker and worker.get("status") == "running":
+        detail=(worker or {}).get("detail") or {}
+        current_id=detail.get("job_id")
+        confirmed_job=bool(worker and worker.get("status") == "running"
+                           and str(current_id).isdigit()
+                           and int(current_id) in summary.get("running_job_ids", []))
+        if confirmed_job:
             return {"status": "running", "message": "Zpracovávám úlohu; dokončení potvrdím samostatně.",
                     "cron_confirmed": True}
         return {"status": "unconfirmed_running",
