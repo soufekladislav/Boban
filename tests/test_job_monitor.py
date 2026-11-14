@@ -70,9 +70,12 @@ class LedgerTests(unittest.TestCase):
         self.assertEqual(stats['last_completed'],'2026-11-14T13:07:00')
         bad=job_monitor.movement_state(stats,{'last_seen':'2026-11-14T14:00:00','age_seconds':999})
         self.assertEqual(bad['status'],'unconfirmed')
-        good=job_monitor.movement_state(stats,{'status':'running','last_seen':'2026-11-14T14:00:00','age_seconds':15})
+        good=job_monitor.movement_state(stats,{'status':'running','detail':{'job_id':21},
+                                                 'last_seen':'2026-11-14T14:00:00','age_seconds':15})
         self.assertTrue(good['cron_confirmed'])
         self.assertEqual(good['status'],'running')
+        other=job_monitor.movement_state(stats,{'status':'running','detail':{'job_id':999},'age_seconds':10})
+        self.assertEqual(other['status'],'unconfirmed_running')
         idle=job_monitor.movement_state(stats,{'status':'idle','age_seconds':15})
         self.assertEqual(idle['status'],'unconfirmed_running')
 
