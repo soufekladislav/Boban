@@ -9,6 +9,8 @@ on:
       - 'app.py'
       - 'worker_runtime.py'
       - 'sync_schedule.py'
+      - 'connector_health.py'
+      - 'tests/test_connector_health.py'
       - 'static/app.js'
       - 'tests/test_worker_runtime.py'
       - 'tests/test_seo_queue_worker_22.py'
@@ -22,10 +24,11 @@ jobs:
         with:
           python-version: '3.11'
       - name: Python syntax
-        run: python -m compileall -q app.py manage.py worker_runtime.py sync_schedule.py
+        run: python -m compileall -q app.py manage.py worker_runtime.py sync_schedule.py connector_health.py
       - name: Worker and scheduling tests
         run: |
           python -m unittest discover -s tests -p 'test_worker_runtime.py' -v
+          python -m unittest discover -s tests -p 'test_connector_health.py' -v
           python -m unittest discover -s tests -p 'test_seo_queue_worker_22.py' -v
       - name: Browser JavaScript syntax
         run: node --check static/app.js
