@@ -5612,6 +5612,45 @@ def touch_worker(name="default", status="running", detail=None):
     conn.commit(); conn.close()
 
 
+def request_manual_data_sync(project_id, provider=None):
+    """Durably request sync before the best-effort HTTP subprocess kick.
+
+    A five-minute cron can fulfil the request even if Passenger kills its
+    detached process. Never enqueue sources that are not configured.
+    """
+    conn = db()
+    try:
+        project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    finally:
+        conn.close()
+    if not project:
+        return 0
+    sources = {
+        "core": bool(project["core_manifest_url"]),
+        "search_console": bool((row := integration_row(project_id, "search_console")) and row["status"] == "connected"),
+        "ga4": bool((row := integration_row(project_id, "ga4")) and row["status"] == "connected"),
+        "gtm": bool((row := integration_row(project_id, "gtm")) and row["status"] == "connected"
+                    and integration_config(row).get("selected_container")),
+        "pagespeed_crux": bool(pagespeed_ready()),
+    }
+    day = worker_runtime.prague_now().date().isoformat()
+    conn = db()
+    count = 0
+    try:
+        for name, available in sources.items():
+            if not available or (provider and provider != name):
+                continue
+            existing = sync_schedule.get_state(conn, project_id, name, day)
+            if existing and existing.get("status") == "running":
+                continue
+            sync_schedule.record_state(conn, DB_BACKEND, project_id, name, day, "requested")
+            count += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return count
+
+
 def kick_background_worker(command="work-queue", project_id=None, provider=None):
     """Request a whitelisted CLI subprocess; Popen is not evidence of completion.
 
@@ -7101,10 +7140,19 @@ def admin_automation_update(rule_key):
 def admin_automation_run_now():
     choice = request.form.get("scope", "work-queue")
     command = "daily-sync-force" if choice == "daily-sync-force" else "work-queue"
-    kicked = kick_background_worker(command)
-    flash("Požádal jsem server o spuštění. Výsledek ověř v průběhu úloh a protokolu synchronizací."
-          if kicked else "Spuštění procesu se nepotvrdilo. Prověř worker.log a cron.",
-          "info" if kicked else "error")
+    requested = 0
+    if command == "daily-sync-force":
+        conn = db()
+        try:
+            ids = [int(row["id"]) for row in conn.execute("SELECT id FROM projects").fetchall()]
+        finally:
+            conn.close()
+        requested = sum(request_manual_data_sync(pid) for pid in ids)
+    kicked = kick_background_worker(command) if command == "work-queue" or requested else False
+    flash(("Požadavek je předán serveru; dokončení ověř podle průběhu a logů."
+           if kicked else "Požadavek je uložený a převezme jej cron.")
+          if command == "work-queue" or requested else "Není co znovu synchronizovat.",
+          "info")
     return redirect(url_for("admin_console") + "#automation")
 
 
@@ -7879,7 +7927,8 @@ def core_sync(project_id):
     project_for_user(project_id)
     if not getattr(current_user, "can_edit", False):
         abort(403)
-    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="core")
+    requested = request_manual_data_sync(project_id, provider="core")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="core") if requested else False
     if kicked:
         flash("Načítání core jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
     else:
@@ -9766,10 +9815,12 @@ def project_sync_run_now(project_id):
     project_for_user(project_id)
     if not getattr(current_user, "can_edit", False):
         abort(403)
-    kicked = kick_background_worker("daily-sync-force", project_id=project_id)
-    flash("Požádal jsem o nové načtení dat. Stav jednotlivých zdrojů uvidíš průběžně v Konektorech."
-          if kicked else "Ruční synchronizaci se nepodařilo spustit; zkontroluj cron a worker.log.",
-          "info" if kicked else "error")
+    requested = request_manual_data_sync(project_id)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id) if requested else False
+    flash((f"Požadavek na {requested} zdrojů je trvale uložený. "
+           + ("Spouštím zpracování." if kicked else "Převezme jej nejbližší cron."))
+          if requested else "Nemám nový připravený zdroj nebo jeho synchronizace už probíhá.",
+          "info")
     return redirect(url_for("connectors", project_id=project_id))
 
 
@@ -10066,7 +10117,8 @@ def performance_sync(project_id):
     project_for_user(project_id)
     if not getattr(current_user, "can_edit", False):
         abort(403)
-    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="pagespeed_crux")
+    requested = request_manual_data_sync(project_id, provider="pagespeed_crux")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="pagespeed_crux") if requested else False
     if kicked:
         flash("Načítání pagespeed_crux jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
     else:
@@ -10095,7 +10147,8 @@ def gtm_sync(project_id):
     project_for_user(project_id)
     if not getattr(current_user, "can_edit", False):
         abort(403)
-    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="gtm")
+    requested = request_manual_data_sync(project_id, provider="gtm")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="gtm") if requested else False
     if kicked:
         flash("Načítání gtm jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
     else:
@@ -10137,7 +10190,8 @@ def search_console_sync(project_id):
     project_for_user(project_id)
     if not getattr(current_user, "can_edit", False):
         abort(403)
-    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="search_console")
+    requested = request_manual_data_sync(project_id, provider="search_console")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="search_console") if requested else False
     if kicked:
         flash("Načítání search_console jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
     else:
@@ -10233,7 +10287,8 @@ def ga4_sync(project_id):
     project_for_user(project_id)
     if not getattr(current_user, "can_edit", False):
         abort(403)
-    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="ga4")
+    requested = request_manual_data_sync(project_id, provider="ga4")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="ga4") if requested else False
     if kicked:
         flash("Načítání ga4 jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
     else:
