@@ -14,7 +14,7 @@
       {% else %}<p>Nemám aktuální ověřená data o návštěvnosti.</p><a href="{{ url_for('connectors',project_id=smart_project.id) }}">Zkontrolovat konektory →</a>{% endif %}
     {% elif kind=='tasks' %}
       <header><span class="eyebrow">ÚKOLY</span><a href="{{ url_for('actions',project_id=smart_project.id,view='todo') }}">Otevřít ↗</a></header>
-      <div class="smart-kpis"><div><span>Rozpracováno</span><strong>{{ smart_advisor.pending }}</strong></div><div><span>Právě běží</span><strong>{{ smart_queue.count or 0 }}</strong></div></div>
+      <div class="smart-kpis"><div><span>Rozpracováno</span><strong>{{ smart_advisor.pending }}</strong></div><div><span>Ve zpracování</span><strong>{{ smart_queue.count or 0 }}</strong></div></div>
       <p>Úpravy vyžadující souhlas čekají na schválení.</p>
     {% elif kind=='integrations' %}
       <header><span class="eyebrow">INTEGRACE</span><a href="{{ url_for('connectors',project_id=smart_project.id) }}">Spravovat ↗</a></header>
