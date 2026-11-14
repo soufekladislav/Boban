@@ -15,5 +15,6 @@ case "${1:-}" in
   queue) exec "$PYTHON" -u manage.py work-queue ;;
   daily) exec "$PYTHON" -u manage.py daily-sync ;;
   heartbeat) exec "$PYTHON" -u manage.py connector-heartbeat ;;
-  *) echo "Použití: $0 queue|daily|heartbeat" >&2; exit 2 ;;
+  cycle) exec "$PYTHON" -u manage.py boban-cycle ;;
+  *) echo "Použití: $0 queue|daily|heartbeat|cycle" >&2; exit 2 ;;
 esac
