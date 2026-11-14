@@ -7256,3 +7256,24 @@ body:not(.public-page) {
   .boban-work-top { flex-wrap:wrap; }
   .boban-work-overview > p { overflow-wrap:anywhere; }
 }
+
+/* Readable job history: one shared view in Tasks and Admin. */
+.job-ledger { margin:16px 0; padding:18px 20px; }
+.job-ledger-filters,.job-ledger-totals { display:flex; align-items:flex-end; flex-wrap:wrap; gap:10px 18px; margin:12px 0; }
+.job-ledger-filters label { display:flex; flex-direction:column; gap:4px; min-width:150px; }
+.job-ledger-status { margin:8px 0; padding:10px 0; font-weight:600; }
+.job-ledger-totals { font-size:.88rem; color:var(--muted,#64748b); }
+.job-ledger-table-wrap { width:100%; overflow-x:auto; -webkit-overflow-scrolling:touch; }
+.job-ledger-table { border-collapse:collapse; width:100%; min-width:950px; font-size:.9rem; }
+.job-ledger-table th,.job-ledger-table td { padding:11px 9px; border-bottom:1px solid var(--border,#e2e8f0); text-align:left; vertical-align:top; }
+.job-ledger-table th { white-space:nowrap; font-size:.82rem; }
+.job-ledger-table td:first-child { min-width:245px; max-width:470px; overflow-wrap:anywhere; }
+.job-ledger-table td:first-child strong { display:block; line-height:1.4; }
+.job-ledger-table td small { display:block; color:var(--muted,#64748b); margin-top:3px; }
+.job-ledger-table td:not(:first-child) { white-space:nowrap; }
+.task-dates { display:flex; flex-wrap:wrap; gap:4px; margin-top:7px; }
+@media(max-width:700px) {
+  .job-ledger { padding:13px; }
+  .job-ledger-totals { display:grid; gap:6px; }
+  .job-ledger-table { min-width:870px; }
+}
