@@ -441,7 +441,7 @@
           setText('[data-work-eta]',etaText);
           const items=card.querySelector('[data-work-list]');
           if (items) {
-            const signature=JSON.stringify((work.items||[]).map(x=>[x.id,x.status,x.stage,x.retry_at]));
+            const signature=JSON.stringify((work.items||[]).map(x=>[x.id,x.status,x.stage,x.retry_at,x.updated_at,x.created_at]));
             if(items.dataset.signature!==signature) {
               items.dataset.signature=signature;
               items.replaceChildren();
@@ -459,7 +459,10 @@
                 strong.textContent=item.title;
                 const small=document.createElement('small');
                 const attempt=item.retry_at?' · další pokus '+item.retry_at.replace('T',' '):'';
-                small.textContent=item.stage+attempt+' · '+item.why;
+                const when=(item.created_at?' · Zařazeno '+String(item.created_at).replace('T',' '):'')+
+                  (item.started_at?' · Spuštěno '+String(item.started_at).replace('T',' '):'')+
+                  (item.updated_at?' · Poslední aktivita '+String(item.updated_at).replace('T',' '):'');
+                small.textContent=item.stage+attempt+' · '+item.why+when;
                 li.append(strong,small);items.append(li);
               }
             }
