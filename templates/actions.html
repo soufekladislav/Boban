@@ -26,7 +26,7 @@
 
   <div class="task-list clean-task-list">
     {% for a in actions %}
-    <article class="task-card-clean task-card-v7 compact-task">
+    <article class="task-card-clean task-card-v7 compact-task" id="action-{{ a.id }}">
       <div class="task-check">{% if view in ['todo','hidden'] and a.status in ['draft','failed','approved','snoozed','dismissed'] %}<input class="js-row-check" form="actions-form" type="checkbox" name="action_ids" value="{{ a.id }}">{% endif %}</div>
       <div class="task-content-clean">
         <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>Úkol #{{ a.id }}</strong> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
