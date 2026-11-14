@@ -5623,7 +5623,7 @@ def request_manual_data_sync(project_id, provider=None):
         project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
     finally:
         conn.close()
-    if not project:
+    if not project or not project_automation_allowed(project_id):
         return 0
     sources = {
         "core": bool(project["core_manifest_url"]),
