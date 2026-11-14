@@ -63,6 +63,13 @@ class ExecutionOverviewTests(unittest.TestCase):
         self.assertIn("schválení",waiting["title"])
         self.assertIsNone(waiting["eta"])
 
+    def test_failed_execution_is_not_an_unapproved_proposal(self):
+        failed=ex.overview([],[],{},0,now=NOW,failed_actions=3)
+        self.assertIn("neúspěšných",failed["title"])
+        self.assertEqual(failed["approvals"],0)
+        self.assertEqual(failed["failed_actions"],3)
+        self.assertIsNone(failed["eta"])
+
     def test_approval_inbox_cap(self):
         self.assertTrue(ex.can_prepare_more(0,0))
         self.assertTrue(ex.can_prepare_more(0,7))
