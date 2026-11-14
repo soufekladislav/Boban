@@ -37,6 +37,7 @@ import feed_workflow
 import commerce_analytics
 import business_dashboard
 import advisor_intelligence
+import goal_first
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -6128,13 +6129,31 @@ def build_operator_plan(project_id, persist=False):
             if f.get("level") in {"warning", "opportunity"}:
                 items.append({"priority": 76, "kind": "measurement", "title": f.get("title") or "Prověřit měření", "reason": f.get("detail") or "Bez správného měření neumím optimalizovat obchodní výsledek.", "owner": "spolu", "can_prepare": True, "needs_user": True, "url": f"/projects/{project_id}/connectors"})
 
+    # Ground planning in data readiness; no assumption that stored OAuth is live.
+    conn = db()
+    try:
+        connector_states = {}
+        for row in conn.execute("SELECT provider,status FROM integrations WHERE project_id=?", (project_id,)).fetchall():
+            connector_states[str(row["provider"])] = str(row["status"] or "")
+        outcome_count = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM analytics_business_outcomes WHERE project_id=? AND test_record=0",
+            (project_id,)
+        ).fetchone()["c"] or 0)
+    finally:
+        conn.close()
+    items.extend(goal_first.readiness_items(
+        project_id, strategy, connector_states,
+        {"ga4": ga4, "search_console": gsc},
+        bool(project["core_manifest_url"]), outcome_count > 0,
+    ))
+
     # Stable de-duplication by title, highest priority wins.
     unique = {}
     for item in items:
         title = item.get("title") or ""
         if title not in unique or item.get("priority",0) > unique[title].get("priority",0):
             unique[title] = item
-    items = sorted(unique.values(), key=lambda x: x.get("priority",0), reverse=True)[:16]
+    items = goal_first.prioritized_items(list(unique.values()), strategy, limit=5)
     boban_count = sum(1 for x in items if x.get("can_prepare") and not x.get("needs_user"))
     help_count = sum(1 for x in items if x.get("needs_user"))
     goal_text = strategy["business_goal"] or "zvýšit relevantní organickou návštěvnost a obchodní výsledek"
@@ -6171,14 +6190,17 @@ def operator_cycle(project_id, force=False):
     plan=build_operator_plan(project_id, persist=True)
     prepared=0; queued=None; growth_queued=None
     if mode in {"specialist", "autopilot"}:
-        rows=operator_actionable_issue_rows(project_id, min(AI_BATCH_LIMIT, 20))
+        allowed_issue_ids, allowed_growth_pages = goal_first.selected_work(plan)
+        rows=[row for row in operator_actionable_issue_rows(project_id, min(AI_BATCH_LIMIT, 60))
+              if int(row["id"]) in allowed_issue_ids][:20]
         if rows:
             queued=queue_ai_prepare_jobs(project_id, rows, auto_apply=False, source="operator")
             prepared += len(rows)
         # The audit fixes hygiene. Search Console opportunities drive growth.
         # Queue a small second pass that may optimize the real landing page, but
         # only when the AI can justify a safe metadata change.
-        growth = operator_growth_candidates(project_id, 3)
+        growth = [item for item in operator_growth_candidates(project_id, 12)
+                  if str(item.get("primary_page") or "").rstrip("/") in allowed_growth_pages][:3]
         if growth:
             growth_queued=queue_growth_prepare_job(project_id, growth, source="operator")
             prepared += int(growth_queued.get("count") or 0)
