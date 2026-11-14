@@ -88,7 +88,7 @@ def _work_item(job):
     }
 
 
-def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now=None):
+def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now=None, failed_actions=0):
     """Display timings only with at least three real samples per active job type.
 
     If a process is stale, paused or the history is too sparse, ETA is unknown.
@@ -107,6 +107,7 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
     measured = historical_seconds(historic_rows)
     view = [_work_item(j) for j in active[:8]]
     waiting = int(awaiting_approval or 0)
+    attention = int(failed_actions or 0)
     total = len(active)
     scheduler_known = bool(worker and worker.get("scheduler_confirmed"))
     title = ("Právě pracuji na úkolech projektu" if running and live else
@@ -114,6 +115,7 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
              "Nemohu potvrdit automatické převzetí úkolů" if total and not scheduler_known else
              "Úkoly čekají na provedení" if total else
              f"Čekám na schválení {waiting} návrhů" if waiting else
+             f"Potřebuji prověřit {attention} neúspěšných úkolů" if attention else
              "Nemám nevyřízenou práci")
     reason = (
         "Probíhá zápis, příprava návrhu nebo ověření. Postup se průběžně aktualizuje."
@@ -126,6 +128,8 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
         if total else
         "Další provedení vyžaduje tvoje rozhodnutí. Po schválení si úkol převezmu."
         if waiting else
+        "Část práce skončila chybou. Potřebuji ověřit příčinu a bezpečný způsob dalšího postupu."
+        if attention else
         "Zatím nic nečeká. Nové návrhy připravím podle nastaveného plánu."
     )
     eta = None
@@ -172,10 +176,11 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
             eta_confidence = "estimated_from_history"
     return {
         "title": title, "why": reason, "total": total, "running": counts["running"],
-        "queued": counts["queued"], "retry": counts["retry"], "approvals": waiting,
+        "queued": counts["queued"], "retry": counts["retry"], "approvals": waiting, "failed_actions": attention,
         "items": view, "eta": eta, "eta_confidence": eta_confidence,
         "progress_label": (f"Právě provádím úlohu #{running['id']}" if running and live else
                            f"Čekám na převzetí {total} úloh" if total else
-                           "Čekám na schválení" if waiting else "Bez otevřených úloh"),
+                           "Čekám na schválení" if waiting else
+                           "Potřebuji řešit chyby" if attention else "Bez otevřených úloh"),
         "next_retry": next((j.get("run_after") for j in active if j["status"] == "retry"), None),
     }
