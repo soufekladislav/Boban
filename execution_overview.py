@@ -109,7 +109,7 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
     waiting = int(awaiting_approval or 0)
     total = len(active)
     scheduler_known = bool(worker and worker.get("scheduler_confirmed"))
-    title = ("Pracuji na schválených úkolech" if running and live else
+    title = ("Právě pracuji na úkolech projektu" if running and live else
              "Úkol právě běží, ale spojení s vykonavatelem nepotvrzeno" if running else
              "Nemohu potvrdit automatické převzetí úkolů" if total and not scheduler_known else
              "Úkoly čekají na provedení" if total else
@@ -158,9 +158,16 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
         if estimated and (not running or live) and worker and worker.get("scheduler_confirmed"):
             # Global jobs ahead make these predictions optimistic; report a range.
             typical = int(median([v["median"] for v in measured.values()]))
-            base = sum(estimated) + max(0, int(global_ahead)) * typical
-            eta = {"min_minutes": max(1, (base // 60) or 1),
-                   "max_minutes": max(2, (int(base * 1.6) + 59) // 60),
+            ahead = max(0, int(global_ahead))
+            queue_items = len(estimated) + ahead
+            base = sum(estimated) + ahead * typical
+            # The cron-driven worker handles at most three jobs per invocation,
+            # once per minute. Fast jobs do NOT imply unlimited throughput.
+            cadence_floor = max(0, (queue_items - 1) // 3) * 60
+            low = max(base, cadence_floor)
+            high = max(int(base * 1.6), cadence_floor + 60)
+            eta = {"min_minutes": max(1, (low + 59) // 60),
+                   "max_minutes": max(2, (high + 59) // 60),
                    "samples": min(measured[str(j["job_type"])]["samples"] for j in active)}
             eta_confidence = "estimated_from_history"
     return {
