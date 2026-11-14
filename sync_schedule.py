@@ -51,6 +51,29 @@ def record_state(conn, backend, project_id, provider, sync_date, status, error=N
         finished_at=excluded.finished_at,last_error=excluded.last_error""", data)
 
 
+def carry_pending_request(conn, backend, project_id, provider, today):
+    """Carry a late-night manual request into the current Prague day.
+
+    This prevents a request at 23:59 disappearing when the five-minute cron
+    first wakes up after midnight.
+    """
+    row = conn.execute(
+        "SELECT sync_date FROM daily_sync_state "
+        "WHERE project_id=? AND provider=? AND status='requested' AND sync_date<? "
+        "ORDER BY sync_date LIMIT 1",
+        (project_id, provider, today)
+    ).fetchone()
+    if not row:
+        return False
+    previous = row["sync_date"]
+    conn.execute(
+        "UPDATE daily_sync_state SET status='superseded' WHERE project_id=? AND provider=? AND sync_date=? AND status='requested'",
+        (project_id, provider, previous)
+    )
+    record_state(conn, backend, project_id, provider, today, "requested")
+    return True
+
+
 def latest_status(conn, project_id, sync_date):
     rows = conn.execute(
         "SELECT provider,status,started_at,finished_at,last_error FROM daily_sync_state "
