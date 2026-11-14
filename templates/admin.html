@@ -6,7 +6,7 @@
 <div class="admin-kpis mobile-carousel" data-mobile-carousel>
   <div class="card metric-card emphasis"><span>Účty</span><strong>{{ stats.users }}</strong><small>{{ stats.roles.get('editor',0) }} editorů · {{ stats.roles.get('visitor',0) }} visitorů</small></div>
   <div class="card metric-card"><span>Projekty</span><strong>{{ stats.projects }}</strong><small>všechny weby v aplikaci</small></div>
-  <div class="card metric-card"><span>Worker</span><strong>{{ 'BĚŽÍ' if stats.worker.healthy else ('ČEKÁ' if stats.worker.status=='idle' else 'NEOVĚŘENO') }}</strong><small>{{ stats.worker.status }}</small></div>
+  <div class="card metric-card"><span>Worker</span><strong>{{ 'BĚŽÍ' if stats.worker.healthy else ('ČEKÁ' if stats.worker.status=='idle' and stats.worker.age_seconds is not none and stats.worker.age_seconds < 180 else 'NEOVĚŘENO') }}</strong><small>{{ stats.worker.status }}</small></div>
   <div class="card metric-card"><span>AI běhy / 24 h</span><strong>{{ stats.engine.runs|int }}</strong><small>{{ stats.engine.errors|int }} chyb</small></div>
   <div class="card metric-card"><span>AI latency</span><strong>{{ (stats.engine.avg_latency/1000)|round(1) }} s</strong><small>průměr za 24 h</small></div>
   <div class="card metric-card"><span>AI náklad / 24 h</span><strong>${{ stats.engine.cost|round(3) }}</strong><small>podle dostupných run metadat</small></div>
