@@ -114,6 +114,8 @@ def public_worker_summary(worker, queue):
     running = int(queue.get("running") or 0)
     retry = int(queue.get("retry") or 0)
     if not total:
+        if int(queue.get("failed") or 0):
+            return "Zpracování skončilo, ale část úloh potřebuje opravu nebo zásah."
         return "Dokončeno nebo nejsou čekající úlohy."
     if running and worker.get("healthy") and worker.get("status") == "running":
         return "Pracuji na úloze. Průběh aktualizuji během zpracování."
