@@ -7,7 +7,7 @@
 3. Ověř `python manage.py doctor` a `python manage.py work-queue-status`. Pro přesnou cestu k Pythonu v cPanelu použij existující virtualenv, případně nastav `WEBBOOSTER_PYTHON`.
 4. Nejdřív vyzkoušej jeden schválený SEO úkol ručním `python manage.py work-queue`. Teprve po ověření zapni minutový cron.
 5. V cPanelu přidej samostatný `daily-sync` každých pět minut. Přestože příkaz běží během dne, data stáhne **nejdříve po 05:00 Europe/Prague**, úspěšně pouze jednou za místní den na zdroj.
-6. **Vypni staré duplicitní crony** `tick`, `seo-apply`, `analytics-sync`. Pokud máš samostatný katalogový cron, ponech ho.
+6. Přidej samostatný read-only příkaz `connector-heartbeat` jednou za 15 minut. Ověřuje dostupnost Fresh Core, Search Console, GA4 a GTM bez stahování statistických sestav. Úspěch či chyba se ukládá odděleně od denních dat.\n7. **Vypni staré duplicitní crony** `tick`, `seo-apply`, `analytics-sync`. Pokud máš samostatný katalogový cron, ponech ho.
 
 Vzorové dva záznamy včetně cest získáš:
 ```bash
