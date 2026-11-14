@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Web Booster worker / maintenance CLI.
+"""Boban command line: separate execution, decisions, sources and connectivity.
 
-Recommended cPanel cron safety net (every minute):
-    <VENV_PYTHON> /home2/.../webbooster.freshcrackers.cz/manage.py tick
+Install the four cron entries printed by scripts/install_seo_worker_cron.sh:
+- work-queue          every minute (approved jobs)
+- daily-sync          every five minutes, Prague-local 05:00 data gate
+- connector-heartbeat every fifteen minutes (read-only live probes)
+- boban-cycle         every fifteen minutes (bounded autonomous planning)
 
-The web app also performs a best-effort detached worker kick whenever work is queued.
-The database queue is authoritative, so a killed process can resume safely later.
+A best-effort detached HTTP kick is *not* a guarantee: the DB queue and
+server-side cron are the durable sources of execution truth.
 """
 import json
 import sys
@@ -17,6 +20,7 @@ import sync_reporting
 import worker_runtime
 import sync_schedule
 import connector_health
+import execution_overview
 
 WORKER_NAME = "default"
 
@@ -244,7 +248,11 @@ def _claim_jobs(limit_jobs=10):
            WHERE job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
              AND status IN ('queued','retry')
              AND (run_after IS NULL OR run_after<=?)
-           ORDER BY id LIMIT ?""",
+           ORDER BY CASE job_type
+               WHEN 'seo_apply_action' THEN 0
+               WHEN 'seo_verify_action' THEN 1
+               WHEN 'seo_ai_prepare' THEN 2 ELSE 3 END,
+               COALESCE(run_after,created_at),id LIMIT ?""",
         (nowv, limit_jobs)
     ).fetchall()
     claimed = []
@@ -313,7 +321,9 @@ def process_seo_apply_jobs(limit_jobs=10):
                     except Exception:
                         payload = {}
                     issue_ids = [int(x) for x in payload.get("issue_ids", []) if str(x).isdigit()]
-                    auto_apply = bool(payload.get("auto_apply"))
+                    # AI generation always creates drafts for user approval.
+                    # A legacy payload may still contain auto_apply=true.
+                    auto_apply = False
                     if issue_ids:
                         conn = wb.db()
                         marks = ",".join("?" for _ in issue_ids)
@@ -328,9 +338,7 @@ def process_seo_apply_jobs(limit_jobs=10):
                         _finish_job(job["id"], {"skipped": True, "reason": "issues_missing"})
                     else:
                         created, _ = wb.ai_prepare_issue_actions(project, rows, auto_apply=False)
-                        if auto_apply and created:
-                            wb.queue_seo_apply_jobs(project_id, created, kick=False, notify=False)
-                        _finish_job(job["id"], {"created_actions": created, "auto_apply": auto_apply})
+                        _finish_job(job["id"], {"created_actions": created, "auto_apply": False})
                         # Only the last AI chunk sends the summary notification.
                         conn = wb.db()
                         left = conn.execute(
@@ -650,21 +658,77 @@ def process_email_outbox(limit=10):
 
 
 def operator_cycles_due():
+    """Boban decides autonomously, but never floods the approval queue."""
     ran = 0
     for project in list_projects():
         if not wb.operator_cycle_due(project):
             continue
+        pid = int(project["id"])
+        conn = wb.db()
+        try:
+            preparing = int(conn.execute(
+                """SELECT COUNT(*) AS c FROM jobs WHERE project_id=? AND
+                   job_type IN ('seo_ai_prepare','seo_growth_prepare')
+                   AND status IN ('queued','retry','running')""", (pid,)
+            ).fetchone()["c"] or 0)
+            drafts = int(conn.execute(
+                "SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved','failed')",
+                (pid,)
+            ).fetchone()["c"] or 0)
+            # Do not generate further work while an earlier operator batch is
+            # still executing, or while the user has eight proposals to review.
+            if not execution_overview.can_prepare_more(preparing, drafts):
+                print(f"BOBAN CYCLE: projekt={pid}, čekám na schválení ({drafts}) či dokončení přípravy ({preparing})")
+                continue
+        finally:
+            conn.close()
         started = wb.now()
         try:
-            result = wb.operator_cycle(project["id"])
-            wb.mark_automation_run(project["id"], "operator_cycle", "completed")
-            log_job(project["id"], "operator_cycle", "completed", result={"prepared": result.get("prepared", 0)}, started_at=started)
+            result = wb.operator_cycle(pid)
+            if result.get("skipped"):
+                wb.mark_automation_run(pid, "operator_cycle", "skipped", result.get("reason"))
+                continue
+            wb.mark_automation_run(pid, "operator_cycle", "completed")
+            log_job(pid, "operator_cycle", "completed", result={
+                "prepared": result.get("prepared", 0),
+                "reason": "scheduled_business_plan"
+            }, started_at=started)
             ran += 1
         except Exception as exc:
-            wb.mark_automation_run(project["id"], "operator_cycle", "failed", exc)
-            log_job(project["id"], "operator_cycle", "failed", result={"error": str(exc)}, started_at=started)
-            print(f"operator project {project['id']}: ERROR {exc}")
+            wb.mark_automation_run(pid, "operator_cycle", "failed", exc)
+            log_job(pid, "operator_cycle", "failed", result={"error_type": type(exc).__name__}, started_at=started)
+            print(f"BOBAN CYCLE: projekt={pid}, chyba={type(exc).__name__}")
     return ran
+
+
+def boban_cycle():
+    """Autonomous planning, weekly read-only crawl and email notices.
+
+    Deliberately separate from the minute-by-minute execution queue and
+    daily data collection. Never auto-publish newly prepared AI changes.
+    """
+    wb.touch_worker("boban_planner", "running", {"phase": "planning"})
+    results = {}
+    for label, operation in (("operator", operator_cycles_due),
+                             ("crawl", seo_crawl_due),
+                             ("notifications", process_email_outbox)):
+        wb.touch_worker("boban_planner", "running", {"phase": label})
+        try:
+            results[label] = operation()
+        except Exception as exc:
+            results[label] = {"error_type": type(exc).__name__}
+            print(f"BOBAN CYCLE: {label} neúspěšné ({type(exc).__name__})")
+    wb.touch_worker("boban_planner", "idle", {"phase": "finished"})
+    print("BOBAN CYCLE: " + json.dumps(results, ensure_ascii=False))
+    return results
+
+
+def locked_boban_cycle():
+    with worker_runtime.exclusive_lock(wb.BASE_DIR / ".boban-cycle.lock") as acquired:
+        if not acquired:
+            print("BOBAN CYCLE: jiný plánovač už pracuje")
+            return {"skipped": "already_running"}
+        return boban_cycle()
 
 
 def _probe_connector(project, provider):
@@ -1058,6 +1122,8 @@ def main():
         locked_work_queue()
     elif cmd == "connector-heartbeat":
         locked_connector_heartbeat()
+    elif cmd == "boban-cycle":
+        locked_boban_cycle()
     elif cmd == "daily-sync":
         flags = sys.argv[2:]
         force = "--force" in flags
@@ -1106,7 +1172,7 @@ def main():
     elif cmd == "doctor":
         doctor()
     else:
-        raise SystemExit("Usage: python manage.py [tick|connector-heartbeat|daily-sync [--force] [--project ID] [--provider NAME]|work-queue|work-queue-status|work-queue-errors|analytics-sync|analytics-backfill|core-sync|seo-apply|verify|gsc-sync|ga4-sync|performance-sync|gtm-sync|operator|catalog-sync|doctor]")
+        raise SystemExit("Usage: python manage.py [tick|boban-cycle|connector-heartbeat|daily-sync [--force] [--project ID] [--provider NAME]|work-queue|work-queue-status|work-queue-errors|analytics-sync|analytics-backfill|core-sync|seo-apply|verify|gsc-sync|ga4-sync|performance-sync|gtm-sync|operator|catalog-sync|doctor]")
 
 
 if __name__ == "__main__":

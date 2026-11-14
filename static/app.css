@@ -7236,3 +7236,23 @@ body:not(.public-page) {
 .global-boban-message-content a{color:#345f2c;text-decoration:underline}
 
 .task-error-reason{display:block;overflow-wrap:anywhere;white-space:pre-wrap;color:#8b2626;line-height:1.55;margin:6px 0}
+
+/* Boban's user-first work status. Detailed logs remain in admin diagnostics. */
+.boban-work-overview { margin: 12px 0 16px; padding: 17px 20px; }
+.boban-work-top { display:flex; gap:14px; align-items:flex-start; justify-content:space-between; }
+.boban-work-top > div { display:flex; flex-direction:column; gap:5px; min-width:0; }
+.boban-work-top strong { font-size:1.05rem; line-height:1.5; }
+.boban-work-overview > p { margin:10px 0; line-height:1.55; }
+.boban-work-meta { display:flex; gap:8px 18px; flex-wrap:wrap; color:var(--muted, #64748b); font-size:.92rem; }
+.boban-work-meta [data-work-eta] { color:inherit; font-weight:600; }
+.boban-work-details { margin-top:9px; }
+.boban-work-details summary { cursor:pointer; font-size:.91rem; }
+.boban-work-items { padding-left:1.2rem; margin:9px 0; }
+.boban-work-items li { margin:0 0 10px; }
+.boban-work-items li strong,.boban-work-items li small { display:block; line-height:1.5; }
+.boban-work-items li small { color:var(--muted, #64748b); }
+@media (max-width:600px) {
+  .boban-work-overview { padding:14px; }
+  .boban-work-top { flex-wrap:wrap; }
+  .boban-work-overview > p { overflow-wrap:anywhere; }
+}

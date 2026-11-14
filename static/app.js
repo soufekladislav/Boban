@@ -338,12 +338,61 @@
       const q = new URLSearchParams();
       const queueCard = document.querySelector('[data-queue-card][data-project-id]');
       const syncCard = document.querySelector('[data-sync-status-card][data-project-id]');
-      const projectCard = queueCard || syncCard;
+      const workCard = document.querySelector('[data-boban-work][data-project-id]');
+      const projectCard = queueCard || syncCard || workCard;
       if (projectCard) q.set('project_id', projectCard.dataset.projectId);
       const res = await fetch('/api/notifications' + (q.toString() ? '?' + q.toString() : ''), {headers:{'Accept':'application/json'}});
       if (!res.ok) return;
       const data = await res.json();
       renderNotifications(data);
+      if (data.work) {
+        const work = data.work;
+        document.querySelectorAll('[data-boban-work]').forEach(card => {
+          const setText=(selector,value)=>{
+            const el=card.querySelector(selector);
+            if (el && el.textContent !== value) el.textContent=value;
+          };
+          setText('[data-work-title]',work.title || 'Stav práce není znám');
+          setText('[data-work-why]',work.why || 'Prověřuji rozpracované kroky.');
+          setText('[data-work-progress]',work.progress_label || 'Stav není ověřen');
+          const eta=work.eta;
+          const etaText=eta && work.eta_confidence==='estimated_from_history' ?
+            'Odhad dokončení: za '+eta.min_minutes+'–'+eta.max_minutes+
+            ' min · podle '+eta.samples+' dokončených úloh tohoto typu' :
+            (work.running && !work.eta ?
+               'Čas dokončení zatím nelze spolehlivě určit.' :
+             work.total ? 'Čas dokončení zatím nelze spolehlivě odhadnout.' :
+             work.approvals ? 'Pokračuji automaticky po schválení.' :
+             work.failed_actions ? 'Potřebuji prověřit neúspěšné úkoly.' :
+              'Žádná otevřená úloha.');
+          setText('[data-work-eta]',etaText);
+          const items=card.querySelector('[data-work-list]');
+          if (items) {
+            const signature=JSON.stringify((work.items||[]).map(x=>[x.id,x.status,x.stage,x.retry_at]));
+            if(items.dataset.signature!==signature) {
+              items.dataset.signature=signature;
+              items.replaceChildren();
+              const rows=work.items||[];
+              if(!rows.length) {
+                const li=document.createElement('li');
+                li.textContent=work.approvals?'Připravené návrhy čekají na schválení.':
+                  work.failed_actions?'Některé úkoly se nezdařily a vyžadují prověření.':
+                  'Aktuálně nemám rozpracované úlohy.';
+                items.append(li);
+              }
+              for(const item of rows) {
+                const li=document.createElement('li');
+                const strong=document.createElement('strong');
+                strong.textContent=item.title;
+                const small=document.createElement('small');
+                const attempt=item.retry_at?' · další pokus '+item.retry_at.replace('T',' '):'';
+                small.textContent=item.stage+attempt+' · '+item.why;
+                li.append(strong,small);items.append(li);
+              }
+            }
+          }
+        });
+      }
       if (data.queue) {
         document.querySelectorAll('[data-queue-count]').forEach(el => { el.textContent = data.queue.actions || data.queue.count || 0; });
         const q=data.queue;
