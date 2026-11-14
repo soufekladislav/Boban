@@ -39,6 +39,7 @@ import business_dashboard
 import advisor_intelligence
 import worker_runtime
 import sync_schedule
+import connector_health
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -1389,6 +1390,7 @@ try:
     commerce_analytics.ensure_schema(_conn_analytics, DB_BACKEND)
     advisor_intelligence.ensure_schema(_conn_analytics, DB_BACKEND)
     sync_schedule.ensure_schema(_conn_analytics, DB_BACKEND)
+    connector_health.ensure_schema(_conn_analytics, DB_BACKEND)
     _conn_analytics.commit()
 finally:
     _conn_analytics.close()
@@ -9701,9 +9703,21 @@ def api_notifications():
         finally:
             sync_conn.close()
     sync_worker = worker_state("daily_sync") if project_id else None
+    health_rows = []
+    if project_id:
+        health_conn = db()
+        try:
+            health_rows = connector_health.list_status(health_conn, project_id)
+        finally:
+            health_conn.close()
     return jsonify({"ok": True, "unread": int(unread), "items": items,
                     "worker": worker, "queue": q,
                     "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None,
+                    "connector_health": [
+                        {"provider": r["provider"], "status": r["status"],
+                         "checked_at": r["checked_at"], "last_success_at": r["last_success_at"],
+                         "error_type": r["error_type"]} for r in health_rows
+                    ] if project_id else None,
                     "daily_sync": {
                         "date": today,
                         "runs": [{"provider": r["provider"], "status": r["status"],
