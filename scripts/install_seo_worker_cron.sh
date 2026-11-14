@@ -1,10 +1,16 @@
-#!/bin/bash
-# Denní spuštění analytické synchronizace a operátora pro Bobana
-PROJECT_DIR="/home2/cesta/k/vašemu/webu/webbooster.freshcrackers.cz"
-VENV_PYTHON="$PROJECT_DIR/venv/bin/python" # Upravte cestu k venv, pokud ji používáte
+#!/usr/bin/env bash
+# Print safe cPanel cron entries. Never modify the server's crontab implicitly.
+set -euo pipefail
+BASE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+RUNNER="$BASE_DIR/scripts/run_boban_cron.sh"
+cat <<EOF
+Vlož do cPanel > Cron Jobs:
+* * * * * /bin/bash "$RUNNER" queue >> "$BASE_DIR/queue_cron.log" 2>&1
+*/5 * * * * /bin/bash "$RUNNER" daily >> "$BASE_DIR/daily_cron.log" 2>&1
 
-cd "$PROJECT_DIR"
-
-# Ochrana proti souběhu pomocí flock
-flock -n .analytics-sync.lock "$VENV_PYTHON" manage.py analytics-sync
-flock -n .operator.lock "$VENV_PYTHON" manage.py operator-run-all
+Synchronizace si sama ověřuje čas Europe/Prague a začne po 05:00.
+Úspěšně načtený zdroj se ve stejný den automaticky znovu nestahuje.
+Nechávej vypnuté původní duplicitní cron příkazy 'manage.py tick',
+'manage.py seo-apply' a 'manage.py analytics-sync'.
+VIRTUALENV Python nastav přes WEBBOOSTER_PYTHON v prostředí cronu.
+EOF
