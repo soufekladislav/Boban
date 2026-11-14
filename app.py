@@ -37,6 +37,9 @@ import feed_workflow
 import commerce_analytics
 import business_dashboard
 import advisor_intelligence
+import worker_runtime
+import sync_schedule
+import connector_health
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -1386,6 +1389,8 @@ _conn_analytics=db()
 try:
     commerce_analytics.ensure_schema(_conn_analytics, DB_BACKEND)
     advisor_intelligence.ensure_schema(_conn_analytics, DB_BACKEND)
+    sync_schedule.ensure_schema(_conn_analytics, DB_BACKEND)
+    connector_health.ensure_schema(_conn_analytics, DB_BACKEND)
     _conn_analytics.commit()
 finally:
     _conn_analytics.close()
@@ -5565,25 +5570,29 @@ def unread_notification_count(user_id):
     return int(row["c"] if row else 0)
 
 
-def worker_state(name="default"):
+def worker_state(name="seo_queue"):
+    """Actual heartbeat of a running worker; an idle process is not active."""
     conn = db()
     row = conn.execute("SELECT * FROM workers WHERE name=?", (name,)).fetchone()
     conn.close()
     if not row:
-        return {"name": name, "status": "unknown", "healthy": False, "last_seen": None, "age_seconds": None}
+        return {"name": name, "status": "unknown", "healthy": False,
+                "last_seen": None, "age_seconds": None, "detail": {}}
     age = None
     try:
         if row["last_seen"]:
             age = max(0, int((datetime.now() - datetime.fromisoformat(row["last_seen"])).total_seconds()))
-    except Exception:
-        age = None
-    return {
-        "name": name,
-        "status": row["status"],
-        "healthy": age is not None and age <= WORKER_STALE_SECONDS,
-        "last_seen": row["last_seen"],
-        "age_seconds": age,
-    }
+    except (TypeError, ValueError):
+        pass
+    try:
+        original_detail = json.loads(row["detail_json"] or "{}")
+    except (TypeError, ValueError):
+        original_detail = {}
+    allowed = {"phase", "job_id", "job_type", "project_id", "processed", "started_at"}
+    detail = {k: v for k, v in original_detail.items() if k in allowed} if isinstance(original_detail, dict) else {}
+    return {"name": name, "status": row["status"],
+            "healthy": bool(age is not None and age <= WORKER_STALE_SECONDS and row["status"] == "running"),
+            "last_seen": row["last_seen"], "age_seconds": age, "detail": detail}
 
 
 def touch_worker(name="default", status="running", detail=None):
@@ -5603,31 +5612,84 @@ def touch_worker(name="default", status="running", detail=None):
     conn.commit(); conn.close()
 
 
-def kick_background_worker(command="seo-apply"):
-    """Best-effort immediate worker kick. The cPanel cron remains the safety net.
+def request_manual_data_sync(project_id, provider=None):
+    """Durably request sync before the best-effort HTTP subprocess kick.
 
-    Worker stdout/stderr is appended to worker.log so a background failure is
-    diagnosable instead of disappearing into /dev/null.
+    A five-minute cron can fulfil the request even if Passenger kills its
+    detached process. Never enqueue sources that are not configured.
     """
+    conn = db()
+    try:
+        project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    finally:
+        conn.close()
+    if not project or not project_automation_allowed(project_id):
+        return 0
+    sources = {
+        "core": bool(project["core_manifest_url"]),
+        "search_console": bool((row := integration_row(project_id, "search_console")) and row["status"] == "connected"),
+        "ga4": bool((row := integration_row(project_id, "ga4")) and row["status"] == "connected"),
+        "gtm": bool((row := integration_row(project_id, "gtm")) and row["status"] == "connected"
+                    and integration_config(row).get("selected_container")),
+        "pagespeed_crux": bool(pagespeed_ready()),
+    }
+    day = worker_runtime.prague_now().date().isoformat()
+    conn = db()
+    count = 0
+    try:
+        for name, available in sources.items():
+            if not available or (provider and provider != name):
+                continue
+            existing = sync_schedule.get_state(conn, project_id, name, day)
+            if existing and existing.get("status") == "running":
+                continue
+            sync_schedule.record_state(conn, DB_BACKEND, project_id, name, day, "requested")
+            count += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return count
+
+
+def kick_background_worker(command="work-queue", project_id=None, provider=None):
+    """Request a whitelisted CLI subprocess; Popen is not evidence of completion.
+
+    CLI flock serialises concurrent manual and cron workers on this host.
+    """
+    commands = {
+        "work-queue": ["work-queue"],
+        "daily-sync": ["daily-sync"],
+        "daily-sync-force": ["daily-sync", "--force"],
+        "tick": ["tick"],
+        "catalog-sync": ["catalog-sync"],
+    }
+    args = commands.get(command)
+    if not args:
+        raise ValueError("Nepovolený příkaz workeru.")
+    args = list(args)
+    if project_id is not None:
+        if command not in {"daily-sync", "daily-sync-force"} or not str(project_id).isdigit():
+            raise ValueError("Neplatný projekt pro synchronizaci.")
+        args.extend(["--project", str(int(project_id))])
+    if provider is not None:
+        if command not in {"daily-sync", "daily-sync-force"} or provider not in {"core", "search_console", "ga4", "gtm", "pagespeed_crux"}:
+            raise ValueError("Nepovolený zdroj synchronizace.")
+        args.extend(["--provider", provider])
     try:
         venv = os.getenv("VIRTUAL_ENV", "").strip()
         venv_python = Path(venv) / "bin" / "python" if venv else None
         python_bin = str(venv_python) if venv_python and venv_python.exists() else sys.executable
-        log_path = BASE_DIR / "worker.log"
-        log_handle = open(log_path, "a", encoding="utf-8")
-        try:
+        with open(BASE_DIR / "worker.log", "a", encoding="utf-8") as log_handle:
             subprocess.Popen(
-                [python_bin, str(BASE_DIR / "manage.py"), command],
+                [python_bin, str(BASE_DIR / "manage.py"), *args],
                 cwd=str(BASE_DIR), stdout=log_handle, stderr=log_handle,
                 start_new_session=True, close_fds=True,
             )
-        finally:
-            log_handle.close()
         return True
     except Exception as exc:
         try:
             with open(BASE_DIR / "worker.log", "a", encoding="utf-8") as f:
-                f.write(f"{now()} worker kick failed: {exc}\n")
+                f.write(f"{now()} worker kick failed: {type(exc).__name__}: {str(exc)[:180]}\\n")
         except Exception:
             pass
         return False
@@ -5670,7 +5732,7 @@ def queue_seo_apply_jobs(project_id, action_ids, kick=True, notify=True):
             [now(), group_id, project_id, *inserted_ids]
         )
     conn.commit(); conn.close()
-    kicked = kick_background_worker("seo-apply") if (kick and inserted_ids) else False
+    kicked = kick_background_worker("work-queue") if (kick and inserted_ids) else False
     if notify and inserted_ids:
         note = (f"Zařadil jsem {len(inserted_ids)} úkolů do fronty. "
                 + ("Požádal jsem worker o spuštění; skutečné provedení ještě není potvrzené. " if kicked else
@@ -5692,8 +5754,12 @@ def queue_summary(project_id):
     """Latest batch progress; do not conflate pending jobs with completed tasks."""
     conn = db()
     latest = conn.execute(
-        "SELECT group_id FROM jobs WHERE project_id=? AND job_type LIKE ? AND group_id IS NOT NULL ORDER BY id DESC LIMIT 1",
-        (project_id, "seo_%")
+        """SELECT group_id FROM jobs
+           WHERE project_id=? AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+             AND group_id IS NOT NULL
+           GROUP BY group_id
+           ORDER BY MAX(CASE WHEN status IN ('queued','retry','running') THEN 1 ELSE 0 END) DESC,
+                    MAX(id) DESC LIMIT 1""", (project_id,)
     ).fetchone()
     data = {"queued": 0, "running": 0, "retry": 0, "failed": 0, "completed": 0, "canceled": 0,
             "total": 0, "count": 0, "percent": 100, "batch_total": 0, "batch_done": 0, "group_id": None}
@@ -5717,6 +5783,25 @@ def queue_summary(project_id):
     for r in pending: data[str(r["status"]).lower()] = int(r["c"])
     data["total"] = data["queued"] + data["running"] + data["retry"]
     data["count"] = data["total"]
+    current = conn.execute(
+        """SELECT id,job_type,status,attempts,run_after,updated_at,locked_at
+           FROM jobs WHERE project_id=?
+             AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+             AND status IN ('running','retry','queued')
+           ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'retry' THEN 1 ELSE 2 END, id LIMIT 1""",
+        (project_id,)
+    ).fetchone()
+    data["current_job"] = ({"id": current["id"], "job_type": current["job_type"],
+                            "status": current["status"], "attempts": current["attempts"],
+                            "retry_at": current["run_after"], "updated_at": current["updated_at"]}
+                           if current else None)
+    recent_failure = conn.execute(
+        """SELECT id,job_type,updated_at FROM jobs WHERE project_id=?
+           AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+           AND status='failed' ORDER BY id DESC LIMIT 1""", (project_id,)
+    ).fetchone()
+    data["last_failed_job"] = ({"id": recent_failure["id"], "job_type": recent_failure["job_type"],
+                                "updated_at": recent_failure["updated_at"]} if recent_failure else None)
     conn.close()
     return data
 
@@ -5755,7 +5840,7 @@ def queue_ai_prepare_jobs(project_id, issue_rows, auto_apply=False, source="user
         project_id, chat_body,
         actions=[{"label": "Sledovat průběh", "url": f"/projects/{project_id}/actions?view=todo", "primary": True}]
     )
-    kicked = kick_background_worker("seo-apply")
+    kicked = kick_background_worker("work-queue")
     return {"group_id": group_id, "count": len(issue_ids), "chunks": chunks, "worker_kicked": kicked}
 
 
@@ -5782,7 +5867,7 @@ def queue_growth_prepare_job(project_id, candidates, source="operator"):
         project_id, "Analyzuji růstové příležitosti", f"Vzal jsem si {len(safe)} konkrétní příležitosti ze Search Console a prověřím, zda z nich umím připravit bezpečný zásah ke schválení.",
         url=f"/projects/{project_id}/actions?view=todo", level="info", kind=f"growth_group_{group_id}", user_id=owner_id
     )
-    kicked=kick_background_worker("seo-apply")
+    kicked=kick_background_worker("work-queue")
     return {"group_id": group_id, "count": len(safe), "worker_kicked": kicked}
 
 
@@ -7060,8 +7145,21 @@ def admin_automation_update(rule_key):
 @login_required
 @admin_required
 def admin_automation_run_now():
-    kicked = kick_background_worker("tick")
-    flash("Spustil jsem systémový tick na pozadí." if kicked else "Tick se nepodařilo spustit. Zkontroluj worker.log a cron.", "success" if kicked else "error")
+    choice = request.form.get("scope", "work-queue")
+    command = "daily-sync-force" if choice == "daily-sync-force" else "work-queue"
+    requested = 0
+    if command == "daily-sync-force":
+        conn = db()
+        try:
+            ids = [int(row["id"]) for row in conn.execute("SELECT id FROM projects").fetchall()]
+        finally:
+            conn.close()
+        requested = sum(request_manual_data_sync(pid) for pid in ids)
+    kicked = kick_background_worker(command) if command == "work-queue" or requested else False
+    flash(("Požadavek je předán serveru; dokončení ověř podle průběhu a logů."
+           if kicked else "Požadavek je uložený a převezme jej cron.")
+          if command == "work-queue" or requested else "Není co znovu synchronizovat.",
+          "info")
     return redirect(url_for("admin_console") + "#automation")
 
 
@@ -7834,11 +7932,12 @@ def core_connect(project_id):
 @login_required
 def core_sync(project_id):
     project_for_user(project_id)
-    try:
-        sync_core(project_id)
-        flash("Fresh Core data byla znovu načtena.", "success")
-    except Exception as exc:
-        flash(f"Synchronizace selhala: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="core")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="core") if requested else False
+    flash(("Ruční načtení core je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(url_for("project", project_id=project_id))
 
 
@@ -9627,6 +9726,8 @@ def action_verify(project_id, action_id):
 @login_required
 def api_notifications():
     project_id = request.args.get("project_id", type=int)
+    if project_id is not None:
+        project_for_user(project_id)
     conn = db()
     visible = "dismissed_at IS NULL AND (snoozed_until IS NULL OR snoozed_until<=?)"
     if project_id:
@@ -9646,7 +9747,37 @@ def api_notifications():
     conn.close()
     items = [dict(r) for r in rows]
     q = queue_summary(project_id) if project_id else None
-    return jsonify({"ok": True, "unread": int(unread), "items": items, "worker": worker_state(), "queue": q})
+    worker = worker_state("seo_queue")
+    today = worker_runtime.prague_now().date().isoformat()
+    sync_rows = []
+    if project_id:
+        sync_conn = db()
+        try:
+            sync_rows = sync_schedule.latest_status(sync_conn, project_id, today)
+        finally:
+            sync_conn.close()
+    sync_worker = worker_state("daily_sync") if project_id else None
+    health_rows = []
+    if project_id:
+        health_conn = db()
+        try:
+            health_rows = connector_health.list_status(health_conn, project_id)
+        finally:
+            health_conn.close()
+    return jsonify({"ok": True, "unread": int(unread), "items": items,
+                    "worker": worker, "queue": q,
+                    "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None,
+                    "connector_health": [
+                        {"provider": r["provider"], "status": r["status"],
+                         "checked_at": r["checked_at"], "last_success_at": r["last_success_at"],
+                         "error_type": r["error_type"]} for r in health_rows
+                    ] if project_id else None,
+                    "daily_sync": {
+                        "date": today,
+                        "runs": [{"provider": r["provider"], "status": r["status"],
+                                  "finished_at": r["finished_at"]} for r in sync_rows],
+                        "worker": sync_worker
+                    } if project_id else None})
 
 
 @app.route("/api/notifications/read", methods=["POST"])
@@ -9683,13 +9814,30 @@ def api_notifications_state():
     return jsonify({"ok": True})
 
 
+@app.route("/projects/<int:project_id>/sync/run-now", methods=["POST"])
+@login_required
+def project_sync_run_now(project_id):
+    project_for_user(project_id)
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id) if requested else False
+    flash((f"Požadavek na {requested} zdrojů je trvale uložený. "
+           + ("Spouštím zpracování." if kicked else "Převezme jej nejbližší cron."))
+          if requested else "Nemám nový připravený zdroj nebo jeho synchronizace už probíhá.",
+          "info")
+    return redirect(url_for("connectors", project_id=project_id))
+
+
 @app.route("/projects/<int:project_id>/actions/process-now", methods=["POST"])
 @login_required
 def actions_process_now(project_id):
     project_for_user(project_id)
-    kicked = kick_background_worker("seo-apply")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("work-queue")
     if kicked:
-        flash("Spustil jsem zpracování fronty. Stránku můžeš klidně opustit; o výsledku tě upozorním.", "success")
+        flash("Požádal jsem server o spuštění fronty. Skutečný postup a případné chyby zobrazím v průběhu.", "info")
     else:
         flash("Nepodařilo se spustit worker přímo z aplikace. Fronta zůstává bezpečně uložená a čeká na serverový cron.", "error")
     return redirect(url_for("actions", project_id=project_id, view="todo"))
@@ -9972,15 +10120,12 @@ def google_callback():
 @login_required
 def performance_sync(project_id):
     project_for_user(project_id)
-    try:
-        data = sync_pagespeed_crux(project_id)
-        mobile = data.get("mobile") or {}; crux = data.get("crux") or {}
-        msg = f"Výkon načten: mobile Lighthouse {mobile.get('performance_score') if mobile.get('performance_score') is not None else '—'}/100."
-        if crux.get("available"):
-            msg += f" CrUX p75: LCP {int(crux.get('lcp_ms') or 0)} ms, INP {int(crux.get('inp_ms') or 0)} ms, CLS {float(crux.get('cls') or 0):.3f}."
-        flash(msg, "success")
-    except Exception as exc:
-        flash(f"PageSpeed/CrUX synchronizace selhala: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="pagespeed_crux")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="pagespeed_crux") if requested else False
+    flash(("Ruční načtení pagespeed_crux je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10003,11 +10148,12 @@ def gtm_container(project_id):
 @login_required
 def gtm_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_gtm(project_id); counts=data.get("counts") or {}
-        flash(f"GTM audit hotový: {counts.get('tags',0)} tagů, {counts.get('triggers',0)} triggerů, {counts.get('variables',0)} proměnných.", "success")
-    except Exception as exc:
-        flash(f"GTM audit selhal: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="gtm")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="gtm") if requested else False
+    flash(("Ruční načtení gtm je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10043,9 +10189,12 @@ def search_console_property(project_id):
 @login_required
 def search_console_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_search_console(project_id); cur=data.get("current") or {}; flash(f"Search Console načtena: {int(cur.get('clicks') or 0)} kliknutí, {int(cur.get('impressions') or 0)} impresí a {len(data.get('top_queries') or [])} dotazů.","success")
-    except Exception as exc: flash(f"Synchronizace Search Console selhala: {exc}","error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="search_console")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="search_console") if requested else False
+    flash(("Ruční načtení search_console je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
@@ -10135,9 +10284,12 @@ def ga4_property(project_id):
 @login_required
 def ga4_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_ga4(project_id); cur=data.get("current") or {}; flash(f"GA4 načtena: Organic Search {int(cur.get('sessions') or 0)} návštěv, {float(cur.get('keyEvents') or 0):.0f} klíčových událostí.","success")
-    except Exception as exc: flash(f"Synchronizace GA4 selhala: {exc}","error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="ga4")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="ga4") if requested else False
+    flash(("Ruční načtení ga4 je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 

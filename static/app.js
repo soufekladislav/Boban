@@ -337,7 +337,9 @@
     try {
       const q = new URLSearchParams();
       const queueCard = document.querySelector('[data-queue-card][data-project-id]');
-      if (queueCard) q.set('project_id', queueCard.dataset.projectId);
+      const syncCard = document.querySelector('[data-sync-status-card][data-project-id]');
+      const projectCard = queueCard || syncCard;
+      if (projectCard) q.set('project_id', projectCard.dataset.projectId);
       const res = await fetch('/api/notifications' + (q.toString() ? '?' + q.toString() : ''), {headers:{'Accept':'application/json'}});
       if (!res.ok) return;
       const data = await res.json();
@@ -350,10 +352,50 @@
         document.querySelectorAll('[data-queue-pct]').forEach(el=>el.textContent=(q.percent??0)+' %');
         document.querySelectorAll('[data-queue-fill]').forEach(el=>el.style.width=Math.min(100,Math.max(0,q.percent??0))+'%');
         document.querySelectorAll('[data-queue-progress]').forEach(el=>el.setAttribute('aria-valuenow',q.percent??0));
-        document.querySelectorAll('[data-queue-errors]').forEach(el=>el.textContent=(q.failed||0)?`Chyb: ${q.failed}.`: '');
-        document.querySelectorAll('[data-queue-label]').forEach(el=>el.textContent=q.total?'Boban zpracovává úkoly':(q.failed?'Některé úkoly skončily chybou':'Poslední dávka dokončena'));
-
+        document.querySelectorAll('[data-queue-errors]').forEach(el=>el.textContent=(q.failed||0)?`Chyb: ${q.failed}.`+(q.last_failed_job?` Poslední úloha #${q.last_failed_job.id}.`:''): '');
+        const status = data.queue_status || 'Stav fronty zatím není dostupný.';
+        document.querySelectorAll('[data-queue-label]').forEach(el=>el.textContent=q.total?'Úlohy čekají nebo probíhají':(q.failed?'Některé úkoly skončily chybou':'Poslední dávka dokončena'));
+        const names = {seo_ai_prepare:'Příprava návrhů',seo_growth_prepare:'Růstové příležitosti',
+                       seo_apply_action:'Publikace změny',seo_verify_action:'Ověřování změny'};
+        const current=q.current_job;
+        const jobText=current?(names[current.job_type]||'Úkol')+' #'+current.id+
+                       (current.status==='retry'?' · opakuji po chybě':' · '+current.status):'';
+        const age=(data.worker && data.worker.age_seconds!=null)?' · poslední heartbeat před '+data.worker.age_seconds+' s':'';
+        document.querySelectorAll('[data-queue-activity]').forEach(el=>el.textContent=status+(jobText?' '+jobText+'.':'')+age);
         if ((data.queue.total || 0) === 0) document.querySelectorAll('[data-queue-card]').forEach(el => el.classList.add('queue-finished'));
+      }
+      if (data.connector_health && document.querySelector('[data-heartbeat-summary]')) {
+        const states=data.connector_health;
+        const labels={core:'Fresh Core',search_console:'Search Console',ga4:'GA4',gtm:'GTM'};
+        const good=states.filter(x=>x.status==='ok');
+        const problems=states.filter(x=>x.status==='failed' || x.status==='needs_setup');
+        const disconnected=states.filter(x=>x.status==='not_connected');
+        const active=states.length-disconnected.length;
+        const last=states.reduce((out,x)=>!out || x.checked_at>out ? x.checked_at:out,'');
+        let message=states.length ? 'Ověřeno '+good.length+'/'+active+' aktivních konektorů.' :
+          'Konektory zatím nemají ověřený živý stav.';
+        if (disconnected.length) message+=' Nepřipojeno: '+disconnected.length+'.';
+        if (problems.length) message+=' Nutná kontrola: '+problems.map(x=>labels[x.provider]||x.provider).join(', ')+'.';
+        if (last) {
+          const d=new Date(last);
+          message+=' Poslední kontrola: '+(Number.isNaN(d.getTime())?last:d.toLocaleString('cs-CZ'))+'.';
+        }
+        document.querySelectorAll('[data-heartbeat-summary]').forEach(el=>el.textContent=message);
+      }
+      if (data.daily_sync) {
+        const ds = data.daily_sync;
+        const runs = ds.runs || [];
+        const providerNames={core:'Fresh Core',search_console:'Search Console',ga4:'GA4',gtm:'GTM',pagespeed_crux:'PageSpeed'};
+        const completed=runs.filter(r=>r.status==='completed').length;
+        const errors=runs.filter(r=>r.status==='failed');
+        const inProgress=runs.filter(r=>r.status==='running');
+        const requested=runs.filter(r=>r.status==='requested');
+        let summary = !runs.length ? 'Dnes zatím nejsou evidovány běhy (pravidelný start od 05:00).' :
+          'Dnes hotovo '+completed+'/'+runs.length+' zdrojů.';
+        if (requested.length) summary += ' Ve frontě: '+requested.map(r=>providerNames[r.provider]||r.provider).join(', ')+'.';
+        if (inProgress.length) summary += ' Zpracovávám: '+inProgress.map(r=>providerNames[r.provider]||r.provider).join(', ')+'.';
+        if (errors.length) summary += ' Chyba: '+errors.map(r=>providerNames[r.provider]||r.provider).join(', ')+'. Boban bude opakovat podle plánu.';
+        document.querySelectorAll('[data-sync-summary]').forEach(el=>el.textContent=summary);
       }
     } catch (_) {}
   }

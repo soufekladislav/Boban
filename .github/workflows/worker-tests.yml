@@ -1,0 +1,38 @@
+name: Boban worker safety tests
+on:
+  push:
+    branches:
+      - fix/worker-daily-sync-progress-20261114
+  pull_request:
+    paths:
+      - 'manage.py'
+      - 'app.py'
+      - 'worker_runtime.py'
+      - 'sync_schedule.py'
+      - 'connector_health.py'
+      - 'tests/test_connector_health.py'
+      - 'static/app.js'
+      - 'tests/test_worker_runtime.py'
+      - 'tests/test_seo_queue_worker_22.py'
+      - '.github/workflows/worker-tests.yml'
+jobs:
+  worker-safety:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install runtime dependencies
+        run: python -m pip install --disable-pip-version-check -r requirements.txt
+      - name: Python syntax
+        run: python -m compileall -q app.py manage.py worker_runtime.py sync_schedule.py connector_health.py
+      - name: Worker and scheduling tests
+        run: |
+          python -m unittest discover -s tests -p 'test_worker_runtime.py' -v
+          python -m unittest discover -s tests -p 'test_connector_health.py' -v
+          python -m unittest discover -s tests -p 'test_seo_queue_worker_22.py' -v
+      - name: Existing regression suite
+        run: python -m unittest discover -s tests -v
+      - name: Browser JavaScript syntax
+        run: node --check static/app.js
