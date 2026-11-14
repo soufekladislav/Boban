@@ -41,6 +41,7 @@ import worker_runtime
 import sync_schedule
 import connector_health
 import execution_overview
+import job_monitor
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -5867,6 +5868,18 @@ def boban_work_overview(project_id):
     return result
 
 
+def job_monitor_snapshot(project_id=None, status=None, limit=60):
+    """Read-only timeline from the same persistent jobs table used by the worker."""
+    conn=db()
+    try:
+        items=job_monitor.load_jobs(conn,project_id=project_id,status=status,limit=limit)
+        summary=job_monitor.stats(conn,project_id=project_id)
+    finally:
+        conn.close()
+    return {"items": items, "summary": summary,
+            "movement": job_monitor.movement_state(summary,worker_state("seo_queue"))}
+
+
 def queue_ai_prepare_jobs(project_id, issue_rows, auto_apply=False, source="user"):
     issue_ids = [int(r["id"]) for r in issue_rows]
     if not issue_ids:
@@ -7063,7 +7076,22 @@ def admin_console():
     smtp=smtp_config(); smtp_safe=dict(smtp); smtp_safe.pop("password",None)
     manifest_token=(os.getenv("DEVELOPER_MANIFEST_TOKEN") or "").strip()
     manifest_url=url_for("developer_manifest", token=manifest_token, _external=True, _scheme="https") if manifest_token else None
-    return render_template("admin.html", stats=_admin_stats(), users=users, rules=rules, projects=projects, smtp=smtp_safe, chat_settings=chat_settings, manifest_url=manifest_url, diagnostic_url=(url_for('safe_diagnostic_manifest',token=_safe_diagnostic_url_token(),_external=True,_scheme='https') if _safe_diagnostic_url_token() else None), smart_card_registry=SMART_CARD_REGISTRY, smart_card_enabled=smart_card_settings(), knowledge_entries=library_rows(limit=100), merchant_developer_registration=(get_system_setting("merchant_developer_registration", {}) or {}), merchant_registration_csrf=_merchant_registration_form_csrf(), google_oauth_ready=google_oauth_ready())
+    monitor_status = request.args.get("jobs_status", "")
+    monitor_project = request.args.get("jobs_project", type=int)
+    if monitor_status not in job_monitor.STATUSES:
+        monitor_status = ""
+    return render_template("admin.html", stats=_admin_stats(), users=users, rules=rules, projects=projects, smtp=smtp_safe, chat_settings=chat_settings, manifest_url=manifest_url, diagnostic_url=(url_for('safe_diagnostic_manifest',token=_safe_diagnostic_url_token(),_external=True,_scheme='https') if _safe_diagnostic_url_token() else None), smart_card_registry=SMART_CARD_REGISTRY, smart_card_enabled=smart_card_settings(), knowledge_entries=library_rows(limit=100), merchant_developer_registration=(get_system_setting("merchant_developer_registration", {}) or {}), merchant_registration_csrf=_merchant_registration_form_csrf(), google_oauth_ready=google_oauth_ready(), job_monitor=job_monitor_snapshot(project_id=monitor_project,status=monitor_status or None,limit=70), jobs_filter_project=monitor_project, jobs_filter_status=monitor_status)
+
+
+@app.route("/admin/jobs/status", methods=["GET"])
+@login_required
+@admin_required
+def admin_jobs_status():
+    project_id=request.args.get("project_id", type=int)
+    status=request.args.get("status","")
+    if status not in job_monitor.STATUSES:
+        status=None
+    return jsonify({"ok": True, "monitor":job_monitor_snapshot(project_id=project_id,status=status,limit=70)})
 
 
 @app.route('/admin/merchant/register/start', methods=['POST'])
@@ -9577,7 +9605,12 @@ def actions(project_id):
     rows = conn.execute(
         f"""SELECT actions.*,
                    (SELECT j.result_json FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_result,
-                   (SELECT j.status FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_status
+                   (SELECT j.status FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_status,
+                   (SELECT j.created_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_created_at,
+                   (SELECT j.started_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_started_at,
+                   (SELECT j.updated_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_updated_at,
+                   (SELECT j.finished_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_finished_at,
+                   (SELECT i.title FROM issues i WHERE i.id=actions.issue_id AND i.project_id=actions.project_id LIMIT 1) AS issue_title
             FROM actions WHERE project_id=? AND {status_where} ORDER BY id DESC LIMIT 500""", (project_id,)
     ).fetchall()
     counts = conn.execute(
@@ -9606,9 +9639,12 @@ def actions(project_id):
                 item["visible_error"] = ""
         else:
             item["visible_error"] = str(item.get("last_error") or "")[:1200]
+        item["action_reason"]=item.get("reason")
+        item["display_title"]=job_monitor.title_for(item)
         cards.append(item)
     return render_template(
         "actions.html", project=p, actions=cards,
+        job_monitor=job_monitor_snapshot(project_id=project_id,limit=45),
         gsc=latest_source_snapshot(project_id, "search_console"),
         view=view, counts=counts or {"todo_count": 0, "done_count": 0, "hidden_count": 0, "total_count": 0},
         queue=queue_summary(project_id), worker=worker_state('seo_queue')
@@ -9825,6 +9861,7 @@ def api_notifications():
     items = [dict(r) for r in rows]
     q = queue_summary(project_id) if project_id else None
     work = boban_work_overview(project_id) if project_id else None
+    history = job_monitor_snapshot(project_id=project_id,limit=45) if project_id else None
     worker = worker_state("seo_queue")
     today = worker_runtime.prague_now().date().isoformat()
     sync_rows = []
@@ -9843,7 +9880,7 @@ def api_notifications():
         finally:
             health_conn.close()
     return jsonify({"ok": True, "unread": int(unread), "items": items,
-                    "worker": worker, "queue": q, "work": work,
+                    "worker": worker, "queue": q, "work": work, "job_history": history,
                     "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None,
                     "connector_health": [
                         {"provider": r["provider"], "status": r["status"],
