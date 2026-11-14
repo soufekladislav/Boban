@@ -12,7 +12,7 @@
     <div class="boban-project-name"><h1>{{ project.name }}</h1><a class="muted text-link-soft" href="{{ project.site_url }}" target="_blank" rel="noopener">{{ project.site_url }} ↗</a></div>
   </div>
   <div class="boban-project-status">
-    {% if queue.total %}<span class="status-chip working"><i></i> Pracuji · {{ queue.count }}</span>{% else %}<span class="status-chip"><i></i> Boban online</span>{% endif %}
+    {% if queue.total %}<span class="status-chip working"><i></i> {{ queue.count }} úkolů ve zpracování</span>{% else %}<span class="status-chip"><i></i> Bez otevřených úloh</span>{% endif %}
     {% if advisor.pending %}<a class="status-chip attention" href="{{ url_for('actions', project_id=project.id, view='todo') }}">{{ advisor.pending }} rozpracovaných</a>{% endif %}
   </div>
 </div>
