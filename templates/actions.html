@@ -5,6 +5,8 @@
   <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><h1>Úkoly</h1><p class="lead-sm">Boban připraví řešení. Ty ho můžeš před publikací libovolně upravit. Teprve potom změnu pošlu přes správný konektor (Fresh Core, Search Console nebo GA4) a ověřím výsledek.</p></div>
 </div>
 
+{% include 'partials/boban_work.html' %}
+
 <div class="tab-row">
   <a class="tab {{ 'active' if view=='todo' }}" href="{{ url_for('actions', project_id=project.id, view='todo') }}">K řešení <b>{{ counts.todo_count or 0 }}</b></a>
   <a class="tab {{ 'active' if view=='done' }}" href="{{ url_for('actions', project_id=project.id, view='done') }}">Dokončené <b>{{ counts.done_count or 0 }}</b></a>
