@@ -6311,20 +6311,36 @@ def operator_cycle(project_id, force=False):
     if not project or not project["core_manifest_url"]:
         return {"skipped": True, "reason": "Fresh Core není připojen."}
     strategy=project_strategy(project); mode=strategy.get("mode") or "specialist"
+    conn=db()
+    try:
+        outstanding=int(conn.execute(
+            "SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved','failed')",
+            (project_id,)
+        ).fetchone()["c"] or 0)
+        active_prepare=int(conn.execute(
+            """SELECT COUNT(*) AS c FROM jobs WHERE project_id=?
+               AND job_type IN ('seo_ai_prepare','seo_growth_prepare')
+               AND status IN ('queued','retry','running')""",(project_id,)
+        ).fetchone()["c"] or 0)
+    finally:
+        conn.close()
+    if not execution_overview.can_prepare_more(active_prepare, outstanding):
+        return {"skipped": True, "reason": "Čekám na dokončení přípravy nebo na schválení hotových návrhů.",
+                "awaiting_approval": outstanding, "active_prepare": active_prepare}
+    remaining=min(4, max(0, 8 - outstanding))
     plan=build_operator_plan(project_id, persist=True)
     prepared=0; queued=None; growth_queued=None
-    if mode in {"specialist", "autopilot"}:
-        rows=operator_actionable_issue_rows(project_id, min(AI_BATCH_LIMIT, 20))
+    if mode in {"specialist", "autopilot"} and remaining:
+        rows=operator_actionable_issue_rows(project_id, min(AI_BATCH_LIMIT, remaining, 3))
         if rows:
             queued=queue_ai_prepare_jobs(project_id, rows, auto_apply=False, source="operator")
             prepared += len(rows)
-        # The audit fixes hygiene. Search Console opportunities drive growth.
-        # Queue a small second pass that may optimize the real landing page, but
-        # only when the AI can justify a safe metadata change.
-        growth = operator_growth_candidates(project_id, 3)
-        if growth:
-            growth_queued=queue_growth_prepare_job(project_id, growth, source="operator")
-            prepared += int(growth_queued.get("count") or 0)
+        left=max(0,remaining-prepared)
+        if left:
+            growth = operator_growth_candidates(project_id, min(left,2))
+            if growth:
+                growth_queued=queue_growth_prepare_job(project_id, growth, source="operator")
+                prepared += int(growth_queued.get("count") or 0)
     ts=now(); conn=db(); conn.execute("UPDATE projects SET last_operator_run=?,updated_at=? WHERE id=?", (ts, ts, project_id)); conn.commit(); conn.close()
     if not prepared:
         add_boban_message(project_id, "Prošel jsem aktuální data a pracovní plán. Teď nemám nový bezpečný zásah, který bych mohl bez dalšího kontextu sám připravit. Prioritní body jsem seřadil na nástěnce.",
