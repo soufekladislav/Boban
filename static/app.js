@@ -363,6 +363,7 @@
                'Čas dokončení zatím nelze spolehlivě určit.' :
              work.total ? 'Čas dokončení zatím nelze spolehlivě odhadnout.' :
              work.approvals ? 'Pokračuji automaticky po schválení.' :
+             work.failed_actions ? 'Potřebuji prověřit neúspěšné úkoly.' :
               'Žádná otevřená úloha.');
           setText('[data-work-eta]',etaText);
           const items=card.querySelector('[data-work-list]');
@@ -374,7 +375,9 @@
               const rows=work.items||[];
               if(!rows.length) {
                 const li=document.createElement('li');
-                li.textContent=work.approvals?'Připravené návrhy čekají na schválení.':'Aktuálně nemám rozpracované úlohy.';
+                li.textContent=work.approvals?'Připravené návrhy čekají na schválení.':
+                  work.failed_actions?'Některé úkoly se nezdařily a vyžadují prověření.':
+                  'Aktuálně nemám rozpracované úlohy.';
                 items.append(li);
               }
               for(const item of rows) {
