@@ -352,7 +352,7 @@
         document.querySelectorAll('[data-queue-pct]').forEach(el=>el.textContent=(q.percent??0)+' %');
         document.querySelectorAll('[data-queue-fill]').forEach(el=>el.style.width=Math.min(100,Math.max(0,q.percent??0))+'%');
         document.querySelectorAll('[data-queue-progress]').forEach(el=>el.setAttribute('aria-valuenow',q.percent??0));
-        document.querySelectorAll('[data-queue-errors]').forEach(el=>el.textContent=(q.failed||0)?`Chyb: ${q.failed}.`: '');
+        document.querySelectorAll('[data-queue-errors]').forEach(el=>el.textContent=(q.failed||0)?`Chyb: ${q.failed}.`+(q.last_failed_job?` Poslední úloha #${q.last_failed_job.id}.`:''): '');
         const status = data.queue_status || 'Stav fronty zatím není dostupný.';
         document.querySelectorAll('[data-queue-label]').forEach(el=>el.textContent=q.total?'Úlohy čekají nebo probíhají':(q.failed?'Některé úkoly skončily chybou':'Poslední dávka dokončena'));
         const names = {seo_ai_prepare:'Příprava návrhů',seo_growth_prepare:'Růstové příležitosti',
