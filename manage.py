@@ -401,6 +401,27 @@ def process_seo_apply_jobs(limit_jobs=10):
                     _group_notify_if_done(project_id, group_id, _row_get(job, "user_id"))
                     continue
 
+                # If the remote write was already accepted, only verify; NEVER re-apply
+                # after a crash during verification.
+                if action["status"] in ("applied", "pending", "verified", "completed"):
+                    _schedule_verify(project, action, group_id, _row_get(job, "user_id"), reason="already_applied")
+                    _finish_job(job["id"], {"skipped_write": True, "verification_queued": True})
+                    processed += 1
+                    continue
+
+                # On retry, first inspect the remote state. This is essential
+                # for non-idempotent GA4 creation after a crash/unknown response.
+                if int(_row_get(job, "attempts", 0) or 0) > 0:
+                    try:
+                        earlier = wb.verify_action(project, action, None)
+                    except Exception:
+                        earlier = {}
+                    if earlier.get("rendered_confirmed"):
+                        wb.save_action_verification(project_id, action_id, earlier)
+                        _finish_job(job["id"], {"recovered_from_remote": True, "verified": True})
+                        processed += 1
+                        continue
+
                 # Apply one action. Idempotent change_id wb-<action id> protects retries on Fresh Core 0.4.3+.
                 try:
                     provider = _row_get(action, "provider", "fresh_core") or "fresh_core"
@@ -413,11 +434,23 @@ def process_seo_apply_jobs(limit_jobs=10):
                     )
                     conn.commit(); conn.close()
                     conn = wb.db(); fresh = conn.execute("SELECT * FROM actions WHERE id=?", (action_id,)).fetchone(); conn.close()
-                    verification = wb.verify_action(project, fresh, result)
-                    wb.save_action_verification(project_id, action_id, verification)
-                    _finish_job(job["id"], {"applied": True, "verified": bool(verification.get("rendered_confirmed"))})
+                    try:
+                        verification = wb.verify_action(project, fresh, result)
+                        wb.save_action_verification(project_id, action_id, verification)
+                        _finish_job(job["id"], {"applied": True, "verified": bool(verification.get("rendered_confirmed"))})
+                    except Exception as verify_exc:
+                        # The WRITE succeeded: a failed read-back must never
+                        # cause the WRITE job to be repeated.
+                        _schedule_verify(project, fresh, group_id, _row_get(job, "user_id"), reason="readback_failed")
+                        _finish_job(job["id"], {"applied": True, "verification_pending": True,
+                                                "verification_error_type": type(verify_exc).__name__})
                 except requests.exceptions.Timeout as exc:
-                    verification = wb.verify_action(project, action, None)
+                    try:
+                        verification = wb.verify_action(project, action, None)
+                    except Exception as verify_exc:
+                        verification = {"rendered_confirmed": False, "provider_confirmed": False,
+                                        "checked_at": wb.now(), "checks": {},
+                                        "note": "Po timeoutu není zatím možné ověřit odpověď cílové služby."}
                     if verification.get("rendered_confirmed"):
                         conn = wb.db()
                         conn.execute(
@@ -443,7 +476,7 @@ def process_seo_apply_jobs(limit_jobs=10):
             except Exception as exc:
                 _schedule_retry(job, exc, action_status="queued")
                 processed += 1
-            wb.touch_worker(WORKER_NAME, "running", {"phase": "actions", "processed": processed})
+            wb.touch_worker("seo_queue", "running", {"phase": "actions", "processed": processed})
 
     wb.touch_worker("seo_queue", "idle", {"processed": processed})
     return processed
