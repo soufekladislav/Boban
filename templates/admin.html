@@ -121,6 +121,10 @@
   </div>
 </section>
 
+{% set job_monitor_admin = true %}
+{% set job_monitor_url = url_for('admin_jobs_status', project_id=jobs_filter_project, status=jobs_filter_status) %}
+{% include 'partials/job_ledger.html' %}
+
 <div class="admin-grid two" id="automation">
   <section class="card admin-card wide-card"><div class="panel-head"><div><span class="eyebrow">AUTOMATIZACE</span><h2>Co Boban dělá pravidelně pro všechny placené účty</h2><p class="muted">Toto jsou systémová pravidla. Boban připravuje návrhy, ale změny webu dál čekají na schválení.</p></div></div>
     <div class="rule-list">{% for r in rules %}<form class="rule-row" method="post" action="{{ url_for('admin_automation_update', rule_key=r.rule_key) }}"><div><strong>{{ r.name }}</strong><p>{{ r.description }}</p></div><label class="switch-field"><input type="checkbox" name="enabled" value="1" {{ 'checked' if r.enabled else '' }}> Zapnuto</label><label>Interval<input type="number" min="1" max="8760" name="interval_hours" value="{{ r.interval_hours }}"><small>hodin</small></label><button class="btn small">Uložit</button></form>{% endfor %}</div>
