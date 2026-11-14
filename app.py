@@ -7929,10 +7929,8 @@ def core_sync(project_id):
         abort(403)
     requested = request_manual_data_sync(project_id, provider="core")
     kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="core") if requested else False
-    if kicked:
-        flash("Načítání core jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
-    else:
-        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
+    flash(("Ruční načtení core je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(url_for("project", project_id=project_id))
 
 
@@ -10119,10 +10117,8 @@ def performance_sync(project_id):
         abort(403)
     requested = request_manual_data_sync(project_id, provider="pagespeed_crux")
     kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="pagespeed_crux") if requested else False
-    if kicked:
-        flash("Načítání pagespeed_crux jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
-    else:
-        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
+    flash(("Ruční načtení pagespeed_crux je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10149,10 +10145,8 @@ def gtm_sync(project_id):
         abort(403)
     requested = request_manual_data_sync(project_id, provider="gtm")
     kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="gtm") if requested else False
-    if kicked:
-        flash("Načítání gtm jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
-    else:
-        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
+    flash(("Ruční načtení gtm je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10192,10 +10186,8 @@ def search_console_sync(project_id):
         abort(403)
     requested = request_manual_data_sync(project_id, provider="search_console")
     kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="search_console") if requested else False
-    if kicked:
-        flash("Načítání search_console jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
-    else:
-        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
+    flash(("Ruční načtení search_console je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
@@ -10289,10 +10281,8 @@ def ga4_sync(project_id):
         abort(403)
     requested = request_manual_data_sync(project_id, provider="ga4")
     kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="ga4") if requested else False
-    if kicked:
-        flash("Načítání ga4 jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
-    else:
-        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
+    flash(("Ruční načtení ga4 je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
