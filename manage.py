@@ -749,9 +749,7 @@ def run_daily_sync(force=False, project_id=None, provider=None):
     successful sources. Explicit manual runs bypass the daily success gate.
     """
     local_now = worker_runtime.prague_now()
-    if not force and local_now.hour < 5:
-        print("DAILY SYNC: čekám na 05:00 Europe/Prague")
-        return {"skipped": "before_05"}
+    # Before 05:00 process only durable manual requests; normal data collection waits.
     day = local_now.date().isoformat()
     result = {"date": day, "completed": 0, "failed": 0, "skipped": 0}
     for project in list_projects():
@@ -771,12 +769,16 @@ def run_daily_sync(force=False, project_id=None, provider=None):
         for name, rule, connected, perform in specs:
             if provider and provider != name:
                 continue
-            if not connected or not wb.automation_rule_enabled(rule):
+            if not connected:
                 result["skipped"] += 1
                 continue
             conn = wb.db()
             try:
                 state = sync_schedule.get_state(conn, pid, name, day)
+                requested = bool(state and state.get("status") == "requested")
+                if not (force or requested or wb.automation_rule_enabled(rule)):
+                    result["skipped"] += 1
+                    continue
                 if not worker_runtime.daily_due(state, local_now, force=force):
                     result["skipped"] += 1
                     continue
