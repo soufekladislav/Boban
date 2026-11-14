@@ -27,6 +27,11 @@ class WorkerRuntimeTests(unittest.TestCase):
         self.assertTrue(worker_runtime.daily_due(None, after))
         self.assertTrue(worker_runtime.daily_due(None, before, force=True))
 
+    def test_queued_manual_request_runs_before_05_even_without_force(self):
+        before = datetime(2026, 11, 14, 1, 30, tzinfo=worker_runtime.PRAGUE)
+        state = {"status": "requested", "started_at": datetime.now(timezone.utc).isoformat()}
+        self.assertTrue(worker_runtime.daily_due(state, before))
+
     def test_completed_source_not_refetched_and_force_can_repeat(self):
         now = worker_runtime.prague_now()
         state = {"status": "completed", "started_at": datetime.now(timezone.utc).isoformat()}
