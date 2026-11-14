@@ -6,6 +6,7 @@
 </div>
 
 {% include 'partials/boban_work.html' %}
+{% include 'partials/job_ledger.html' %}
 
 <div class="tab-row">
   <a class="tab {{ 'active' if view=='todo' }}" href="{{ url_for('actions', project_id=project.id, view='todo') }}">K řešení <b>{{ counts.todo_count or 0 }}</b></a>
@@ -25,11 +26,18 @@
 
   <div class="task-list clean-task-list">
     {% for a in actions %}
-    <article class="task-card-clean task-card-v7 compact-task">
+    <article class="task-card-clean task-card-v7 compact-task" id="action-{{ a.id }}">
       <div class="task-check">{% if view in ['todo','hidden'] and a.status in ['draft','failed','approved','snoozed','dismissed'] %}<input class="js-row-check" form="actions-form" type="checkbox" name="action_ids" value="{{ a.id }}">{% endif %}</div>
       <div class="task-content-clean">
-        <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>Úkol #{{ a.id }}</strong> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
+        <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>{{ a.display_title }}</strong> <small class="muted">#{{ a.id }}</small> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
         {% if a.target_url %}<div class="muted small task-url-text">{{ a.target_url }}</div>{% endif %}
+        <div class="muted small task-dates">
+          <span>Vytvořeno {{ (a.created_at or '—').replace('T',' ') }}</span>
+          {% if a.approved_at %}<span> · Schváleno {{ a.approved_at.replace('T',' ') }}</span>{% endif %}
+          {% if a.latest_job_started_at %}<span> · Spuštěno {{ a.latest_job_started_at.replace('T',' ') }}</span>{% endif %}
+          {% if a.latest_job_updated_at %}<span> · Poslední aktivita {{ a.latest_job_updated_at.replace('T',' ') }}</span>{% endif %}
+          {% if a.latest_job_finished_at %}<span> · Dokončeno {{ a.latest_job_finished_at.replace('T',' ') }}</span>{% endif %}
+        </div>
 
         <details class="task-expand" {{ 'open' if request.args.get('expand') == a.id|string else '' }}><summary>Detail úkolu · navržená změna, důvod a ověření</summary>
         {% if a.status in ['draft','failed','approved'] and a.proposed %}
