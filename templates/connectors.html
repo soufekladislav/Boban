@@ -5,6 +5,12 @@
   <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><h1>Konektory</h1><p class="lead-sm">Konektory jsou zdroje dat a akční kanály. U Google služeb nově ověřuji nejen oprávnění, ale i to, že vybraná property skutečně patří k tomuto webu.</p></div>
 </div>
 
+<section class="card" data-sync-status-card data-project-id="{{ project.id }}">
+  <div class="panel-head"><div><span class="eyebrow">DATOVÉ SYNCHRONIZACE</span><h2>Ranní načítání a ruční obnova</h2></div></div>
+  <p class="muted">Denní data aktualizuji po 05:00 (Europe/Prague). Chybový zdroj mohu opakovat samostatně. Ruční spuštění neblokuje stránku.</p>
+  <p data-sync-summary role="status" aria-live="polite">Načítám dnešní protokol synchronizací…</p>
+  {% if current_user.can_edit %}<form method="post" action="{{ url_for('project_sync_run_now', project_id=project.id) }}"><button class="btn primary" type="submit">Znovu načíst data projektu</button></form>{% endif %}
+</section>
 <div class="connector-grid">
   <section class="card connector-card featured" id="fresh-core">
     <div class="connector-top"><div class="connector-icon">FC</div><div><span class="eyebrow">WEB</span><h3>Fresh Core – čtení</h3></div><span class="badge {{ project.status }}">{{ 'Připojeno' if project.status=='connected' else 'Čeká' }}</span></div>
