@@ -37,6 +37,8 @@ import feed_workflow
 import commerce_analytics
 import business_dashboard
 import advisor_intelligence
+import worker_runtime
+import sync_schedule
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -1386,6 +1388,7 @@ _conn_analytics=db()
 try:
     commerce_analytics.ensure_schema(_conn_analytics, DB_BACKEND)
     advisor_intelligence.ensure_schema(_conn_analytics, DB_BACKEND)
+    sync_schedule.ensure_schema(_conn_analytics, DB_BACKEND)
     _conn_analytics.commit()
 finally:
     _conn_analytics.close()
@@ -5565,25 +5568,29 @@ def unread_notification_count(user_id):
     return int(row["c"] if row else 0)
 
 
-def worker_state(name="default"):
+def worker_state(name="seo_queue"):
+    """Actual heartbeat of a running worker; an idle process is not active."""
     conn = db()
     row = conn.execute("SELECT * FROM workers WHERE name=?", (name,)).fetchone()
     conn.close()
     if not row:
-        return {"name": name, "status": "unknown", "healthy": False, "last_seen": None, "age_seconds": None}
+        return {"name": name, "status": "unknown", "healthy": False,
+                "last_seen": None, "age_seconds": None, "detail": {}}
     age = None
     try:
         if row["last_seen"]:
             age = max(0, int((datetime.now() - datetime.fromisoformat(row["last_seen"])).total_seconds()))
-    except Exception:
-        age = None
-    return {
-        "name": name,
-        "status": row["status"],
-        "healthy": age is not None and age <= WORKER_STALE_SECONDS,
-        "last_seen": row["last_seen"],
-        "age_seconds": age,
-    }
+    except (TypeError, ValueError):
+        pass
+    try:
+        original_detail = json.loads(row["detail_json"] or "{}")
+    except (TypeError, ValueError):
+        original_detail = {}
+    allowed = {"phase", "job_id", "job_type", "project_id", "processed", "started_at"}
+    detail = {k: v for k, v in original_detail.items() if k in allowed} if isinstance(original_detail, dict) else {}
+    return {"name": name, "status": row["status"],
+            "healthy": bool(age is not None and age <= WORKER_STALE_SECONDS and row["status"] == "running"),
+            "last_seen": row["last_seen"], "age_seconds": age, "detail": detail}
 
 
 def touch_worker(name="default", status="running", detail=None):
@@ -5603,31 +5610,36 @@ def touch_worker(name="default", status="running", detail=None):
     conn.commit(); conn.close()
 
 
-def kick_background_worker(command="seo-apply"):
-    """Best-effort immediate worker kick. The cPanel cron remains the safety net.
+def kick_background_worker(command="work-queue"):
+    """Request a whitelisted CLI subprocess; Popen is not evidence of completion.
 
-    Worker stdout/stderr is appended to worker.log so a background failure is
-    diagnosable instead of disappearing into /dev/null.
+    CLI flock serialises concurrent manual and cron workers on this host.
     """
+    commands = {
+        "work-queue": ["work-queue"],
+        "daily-sync": ["daily-sync"],
+        "daily-sync-force": ["daily-sync", "--force"],
+        "tick": ["tick"],
+        "catalog-sync": ["catalog-sync"],
+    }
+    args = commands.get(command)
+    if not args:
+        raise ValueError("Nepovolený příkaz workeru.")
     try:
         venv = os.getenv("VIRTUAL_ENV", "").strip()
         venv_python = Path(venv) / "bin" / "python" if venv else None
         python_bin = str(venv_python) if venv_python and venv_python.exists() else sys.executable
-        log_path = BASE_DIR / "worker.log"
-        log_handle = open(log_path, "a", encoding="utf-8")
-        try:
+        with open(BASE_DIR / "worker.log", "a", encoding="utf-8") as log_handle:
             subprocess.Popen(
-                [python_bin, str(BASE_DIR / "manage.py"), command],
+                [python_bin, str(BASE_DIR / "manage.py"), *args],
                 cwd=str(BASE_DIR), stdout=log_handle, stderr=log_handle,
                 start_new_session=True, close_fds=True,
             )
-        finally:
-            log_handle.close()
         return True
     except Exception as exc:
         try:
             with open(BASE_DIR / "worker.log", "a", encoding="utf-8") as f:
-                f.write(f"{now()} worker kick failed: {exc}\n")
+                f.write(f"{now()} worker kick failed: {type(exc).__name__}: {str(exc)[:180]}\\n")
         except Exception:
             pass
         return False
@@ -5670,7 +5682,7 @@ def queue_seo_apply_jobs(project_id, action_ids, kick=True, notify=True):
             [now(), group_id, project_id, *inserted_ids]
         )
     conn.commit(); conn.close()
-    kicked = kick_background_worker("seo-apply") if (kick and inserted_ids) else False
+    kicked = kick_background_worker("work-queue") if (kick and inserted_ids) else False
     if notify and inserted_ids:
         note = (f"Zařadil jsem {len(inserted_ids)} úkolů do fronty. "
                 + ("Požádal jsem worker o spuštění; skutečné provedení ještě není potvrzené. " if kicked else
@@ -5755,7 +5767,7 @@ def queue_ai_prepare_jobs(project_id, issue_rows, auto_apply=False, source="user
         project_id, chat_body,
         actions=[{"label": "Sledovat průběh", "url": f"/projects/{project_id}/actions?view=todo", "primary": True}]
     )
-    kicked = kick_background_worker("seo-apply")
+    kicked = kick_background_worker("work-queue")
     return {"group_id": group_id, "count": len(issue_ids), "chunks": chunks, "worker_kicked": kicked}
 
 
@@ -5782,7 +5794,7 @@ def queue_growth_prepare_job(project_id, candidates, source="operator"):
         project_id, "Analyzuji růstové příležitosti", f"Vzal jsem si {len(safe)} konkrétní příležitosti ze Search Console a prověřím, zda z nich umím připravit bezpečný zásah ke schválení.",
         url=f"/projects/{project_id}/actions?view=todo", level="info", kind=f"growth_group_{group_id}", user_id=owner_id
     )
-    kicked=kick_background_worker("seo-apply")
+    kicked=kick_background_worker("work-queue")
     return {"group_id": group_id, "count": len(safe), "worker_kicked": kicked}
 
 
@@ -9687,7 +9699,7 @@ def api_notifications_state():
 @login_required
 def actions_process_now(project_id):
     project_for_user(project_id)
-    kicked = kick_background_worker("seo-apply")
+    kicked = kick_background_worker("work-queue")
     if kicked:
         flash("Spustil jsem zpracování fronty. Stránku můžeš klidně opustit; o výsledku tě upozorním.", "success")
     else:
