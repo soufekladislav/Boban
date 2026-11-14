@@ -16,6 +16,7 @@ import app as wb
 import sync_reporting
 import worker_runtime
 import sync_schedule
+import connector_health
 
 WORKER_NAME = "default"
 
@@ -629,6 +630,81 @@ def operator_cycles_due():
     return ran
 
 
+def _probe_connector(project, provider):
+    """Small read-only API check, separate from data sync and stored OAuth state."""
+    pid = int(project["id"])
+    if provider == "core":
+        url = str(_row_get(project, "core_manifest_url") or "")
+        if not url:
+            return "not_connected"
+        data = wb.fetch_json(url, expected_host=wb.normalize_host(project["site_url"]))
+        if not isinstance(data, dict):
+            raise ValueError("Manifest nevrátil JSON objekt.")
+        return "ok"
+    integ = wb.integration_row(pid, provider)
+    if not integ or integ["status"] != "connected":
+        return "not_connected"
+    config = wb.integration_config(integ)
+    if provider == "search_console":
+        selected = str(config.get("selected_property") or "")
+        if not selected:
+            return "needs_setup"
+        token = wb.google_refresh_access(pid, provider)
+        sites = wb.google_api_get("https://www.googleapis.com/webmasters/v3/sites", token)
+        available = {str(r.get("siteUrl") or "") for r in sites.get("siteEntry") or []}
+        return "ok" if selected in available else "needs_setup"
+    if provider == "ga4":
+        selected = str(config.get("selected_property") or "")
+        if not selected.startswith("properties/"):
+            return "needs_setup"
+        token = wb.google_refresh_access(pid, provider)
+        item = wb.google_api_get(f"https://analyticsadmin.googleapis.com/v1beta/{selected}", token)
+        return "ok" if str(item.get("name") or "") == selected else "needs_setup"
+    if provider == "gtm":
+        selected = str(config.get("selected_container") or "")
+        if not selected.startswith("accounts/"):
+            return "needs_setup"
+        token = wb.google_refresh_access(pid, provider)
+        item = wb.google_api_get(f"https://tagmanager.googleapis.com/tagmanager/v2/{selected}", token)
+        return "ok" if str(item.get("path") or "") == selected else "needs_setup"
+    raise ValueError("Nepodporovaný provider.")
+
+
+def connector_heartbeat():
+    """Periodically verify live connectivity, without resyncing metrics or writing websites."""
+    statuses = {"ok": 0, "failed": 0, "not_connected": 0, "needs_setup": 0}
+    for project in list_projects():
+        pid = int(project["id"])
+        if not wb.project_automation_allowed(pid):
+            continue
+        for provider in ("core", "search_console", "ga4", "gtm"):
+            wb.touch_worker("connector_health", "running", {"phase": provider, "project_id": pid})
+            error_type = None
+            try:
+                status = _probe_connector(project, provider)
+            except Exception as exc:
+                status = "failed"
+                error_type = type(exc).__name__
+            conn = wb.db()
+            try:
+                connector_health.record(conn, wb.DB_BACKEND, pid, provider, status, error_type)
+                conn.commit()
+            finally:
+                conn.close()
+            statuses[status] += 1
+    wb.touch_worker("connector_health", "idle", {"processed": sum(statuses.values())})
+    print("CONNECTOR HEARTBEAT: " + json.dumps(statuses, ensure_ascii=False))
+    return statuses
+
+
+def locked_connector_heartbeat():
+    with worker_runtime.exclusive_lock(wb.BASE_DIR / ".connector-heartbeat.lock") as acquired:
+        if not acquired:
+            print("CONNECTOR HEARTBEAT: jiná kontrola už běží")
+            return {"skipped": "already_running"}
+        return connector_heartbeat()
+
+
 def run_daily_sync(force=False, project_id=None, provider=None):
     """Collect business data once per Europe/Prague day, at/after 05:00.
 
@@ -935,6 +1011,8 @@ def main():
         tick()
     elif cmd in ("work-queue", "seo-apply"):
         locked_work_queue()
+    elif cmd == "connector-heartbeat":
+        locked_connector_heartbeat()
     elif cmd == "daily-sync":
         flags = sys.argv[2:]
         force = "--force" in flags
@@ -983,7 +1061,7 @@ def main():
     elif cmd == "doctor":
         doctor()
     else:
-        raise SystemExit("Usage: python manage.py [tick|daily-sync [--force] [--project ID] [--provider NAME]|work-queue|work-queue-status|work-queue-errors|analytics-sync|analytics-backfill|core-sync|seo-apply|verify|gsc-sync|ga4-sync|performance-sync|gtm-sync|operator|catalog-sync|doctor]")
+        raise SystemExit("Usage: python manage.py [tick|connector-heartbeat|daily-sync [--force] [--project ID] [--provider NAME]|work-queue|work-queue-status|work-queue-errors|analytics-sync|analytics-backfill|core-sync|seo-apply|verify|gsc-sync|ga4-sync|performance-sync|gtm-sync|operator|catalog-sync|doctor]")
 
 
 if __name__ == "__main__":
