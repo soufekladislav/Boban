@@ -146,6 +146,15 @@ def analyze(conn,project_id,question):
     
     sources = [s for s in (gsrc, ssrc) if s]
     result = {'tool': tool, 'evidence_sources': sources, 'limitations': [], 'facts': {}}
+    connections = conn.execute(
+        "SELECT provider,status,updated_at FROM integrations WHERE project_id=? ORDER BY provider",
+        (project_id,)
+    ).fetchall()
+    result['facts']['connections'] = [
+        {'provider': r['provider'], 'status': r['status'], 'checked_at': None,
+         'status_updated_at': r['updated_at'], 'note': 'Uložený stav; živý heartbeat není ověřen.'}
+        for r in connections
+    ]
     
     period = ga4.get('period') or {}
     current = ga4.get('current_total') or {}
