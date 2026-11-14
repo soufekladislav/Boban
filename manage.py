@@ -791,7 +791,12 @@ def run_daily_sync(force=False, project_id=None, provider=None):
                 "phase": name, "project_id": pid, "started_at": started
             })
             try:
-                data = perform()
+                with worker_runtime.JobHeartbeat(
+                    lambda: wb.touch_worker("daily_sync", "running", {
+                        "phase": name, "project_id": pid, "started_at": started
+                    })
+                ):
+                    data = perform()
                 conn = wb.db()
                 try:
                     sync_schedule.record_state(conn, wb.DB_BACKEND, pid, name, day, "completed")
