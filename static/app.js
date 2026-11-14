@@ -344,6 +344,7 @@
       const summary=monitor.summary||{};
       text('[data-job-movement]',(monitor.movement||{}).message||'Průběh zatím nelze ověřit.');
       text('[data-job-active]','Rozpracováno: '+(summary.active||0));
+      text('[data-job-completed-recent]','Dokončeno za 15 min: '+(summary.completed_15m||0));
       text('[data-job-last-completed]','Poslední dokončení: '+stamp(summary.last_completed||'neověřeno'));
       text('[data-job-last-started]','Poslední zahájení: '+stamp(summary.last_started||'neověřeno'));
       text('[data-job-oldest-waiting]','Nejstarší čekající: '+stamp(summary.oldest_waiting||'žádný'));
