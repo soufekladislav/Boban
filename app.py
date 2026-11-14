@@ -5795,6 +5795,13 @@ def queue_summary(project_id):
                             "status": current["status"], "attempts": current["attempts"],
                             "retry_at": current["run_after"], "updated_at": current["updated_at"]}
                            if current else None)
+    recent_failure = conn.execute(
+        """SELECT id,job_type,updated_at FROM jobs WHERE project_id=?
+           AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+           AND status='failed' ORDER BY id DESC LIMIT 1""", (project_id,)
+    ).fetchone()
+    data["last_failed_job"] = ({"id": recent_failure["id"], "job_type": recent_failure["job_type"],
+                                "updated_at": recent_failure["updated_at"]} if recent_failure else None)
     conn.close()
     return data
 
