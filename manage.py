@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 import requests
 import app as wb
 import sync_reporting
+import worker_runtime
+import sync_schedule
 
 WORKER_NAME = "default"
 
@@ -257,166 +259,192 @@ def _claim_jobs(limit_jobs=10):
     return claimed
 
 
+def _heartbeat_job(job):
+    """Extend only the currently claimed job lease using a NEW DB connection."""
+    ts = wb.now()
+    conn = wb.db()
+    try:
+        cur = conn.execute(
+            "UPDATE jobs SET locked_at=?,updated_at=? WHERE id=? AND status='running'",
+            (ts, ts, job["id"])
+        )
+        conn.commit()
+        active = getattr(cur, "rowcount", 0) == 1
+    finally:
+        conn.close()
+    if active:
+        wb.touch_worker("seo_queue", "running", {
+            "phase": "working", "job_id": int(job["id"]),
+            "job_type": str(job["job_type"]), "project_id": int(job["project_id"]),
+            "started_at": str(_row_get(job, "started_at") or ts),
+        })
+
+
 def process_seo_apply_jobs(limit_jobs=10):
-    wb.touch_worker(WORKER_NAME, "running", {"phase": "actions"})
-    recover_stale_jobs()
-    migrate_legacy_queue()
+    wb.touch_worker("seo_queue", "running", {"phase": "actions"})
     processed = 0
-    for job in _claim_jobs(limit_jobs):
+    # Claim ONE job at a time. A slow first job must never falsely mark the
+    # remaining jobs as running (or let stale recovery repeat their writes).
+    for _ in range(max(1, int(limit_jobs))):
+        batch = _claim_jobs(1)
+        if not batch:
+            break
+        job = batch[0]
         project_id = job["project_id"]
         action_id = _row_get(job, "action_id")
         group_id = _row_get(job, "group_id")
-        try:
-            conn = wb.db()
-            project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
-            action = conn.execute("SELECT * FROM actions WHERE id=? AND project_id=?", (action_id, project_id)).fetchone() if action_id else None
-            conn.close()
-            if not project:
-                _finish_job(job["id"], {"skipped": True, "reason": "missing_project"})
-                continue
+        with worker_runtime.JobHeartbeat(lambda: _heartbeat_job(job)):
+            try:
+                conn = wb.db()
+                project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+                action = conn.execute("SELECT * FROM actions WHERE id=? AND project_id=?", (action_id, project_id)).fetchone() if action_id else None
+                conn.close()
+                if not project:
+                    _finish_job(job["id"], {"skipped": True, "reason": "missing_project"})
+                    continue
 
-            # AI preparation jobs intentionally have no action_id yet: their
-            # purpose is to create actions. Handle them before requiring an
-            # action row.
-            if job["job_type"] == "seo_ai_prepare":
-                try:
-                    payload = json.loads(job["payload_json"] or "{}")
-                except Exception:
-                    payload = {}
-                issue_ids = [int(x) for x in payload.get("issue_ids", []) if str(x).isdigit()]
-                auto_apply = bool(payload.get("auto_apply"))
-                if issue_ids:
-                    conn = wb.db()
-                    marks = ",".join("?" for _ in issue_ids)
-                    rows = conn.execute(
-                        f"SELECT * FROM issues WHERE project_id=? AND status='open' AND id IN ({marks}) ORDER BY id",
-                        [project_id, *issue_ids]
-                    ).fetchall()
-                    conn.close()
-                else:
-                    rows = []
-                if not rows:
-                    _finish_job(job["id"], {"skipped": True, "reason": "issues_missing"})
-                else:
-                    created, _ = wb.ai_prepare_issue_actions(project, rows, auto_apply=False)
-                    if auto_apply and created:
-                        wb.queue_seo_apply_jobs(project_id, created, kick=False, notify=False)
-                    _finish_job(job["id"], {"created_actions": created, "auto_apply": auto_apply})
-                    # Only the last AI chunk sends the summary notification.
-                    conn = wb.db()
-                    left = conn.execute(
-                        "SELECT COUNT(*) c FROM jobs WHERE project_id=? AND group_id=? AND job_type='seo_ai_prepare' AND status IN ('queued','running','retry')",
-                        (project_id, group_id)
-                    ).fetchone()["c"]
-                    conn.close()
-                    if not left:
-                        if auto_apply:
-                            msg = "SEO návrhy jsem dokončil a bezpečné změny jsem rovnou zařadil k provedení. Teď je postupně zapisuji přes Fresh Core a ověřuji na webu."
-                            wb.create_notification(
-                                project_id, "Návrhy mám připravené", msg,
-                                url=f"/projects/{project_id}/actions?view=todo", level="success", kind=f"ai_group_{group_id}", user_id=_row_get(job, "user_id")
-                            )
-                            wb.add_boban_message(project_id, msg, actions=[{"label":"Sledovat provedení","url":f"/projects/{project_id}/actions?view=todo","primary":True}])
-                        else:
-                            msg = "Dokončil jsem návrhy. Otevři Úkoly, kde je můžeš projít, označit a schválit."
-                            wb.create_notification(
-                                project_id, "SEO návrhy jsou připravené", msg,
-                                url=f"/projects/{project_id}/actions?view=todo", level="success", kind=f"ai_group_{group_id}", user_id=_row_get(job, "user_id")
-                            )
-                            wb.add_boban_message(project_id, msg, actions=[{"label":"Projít návrhy","url":f"/projects/{project_id}/actions?view=todo","primary":True}])
-                processed += 1
-                continue
-
-            if job["job_type"] == "seo_growth_prepare":
-                try:
-                    payload = json.loads(job["payload_json"] or "{}")
-                except Exception:
-                    payload = {}
-                candidates = payload.get("candidates") or []
-                created, skipped = wb.ai_prepare_growth_actions(project, candidates)
-                _finish_job(job["id"], {"created_actions": created, "skipped": skipped})
-                if created:
-                    msg = f"Z dat Search Console jsem prověřil {len(candidates)} růstové příležitosti a připravil {len(created)} konkrétní návrhy ke schválení. Tam, kde metadata nebyla správný zásah, jsem změnu nevyráběl naslepo."
-                    wb.create_notification(
-                        project_id, "Růstové návrhy jsou připravené", msg,
-                        url=f"/projects/{project_id}/actions?view=todo", level="success", kind=f"growth_done_{group_id}", user_id=_row_get(job, "user_id")
-                    )
-                    wb.add_boban_message(project_id, msg, actions=[{"label":"Projít návrhy","url":f"/projects/{project_id}/actions?view=todo","primary":True}])
-                else:
-                    msg = "Růstové příležitosti ze Search Console jsem prověřil, ale nevytvořil jsem změnu jen pro změnu. U těchto stránek teď metadata nejsou bezpečně nejlepší zásah; nechávám je v pracovním plánu pro obsah/prolinkování."
-                    wb.add_boban_message(project_id, msg, actions=[{"label":"Zobrazit pracovní plán","url":f"/projects/{project_id}#boban-context","primary":True}])
-                processed += 1
-                continue
-
-            if not action:
-                _finish_job(job["id"], {"skipped": True, "reason": "missing_action"})
-                processed += 1
-                continue
-
-            if job["job_type"] == "seo_verify_action":
-                result_data = {}
-                try:
-                    result_data = json.loads(action["result_json"] or "{}")
-                except Exception:
-                    pass
-                verification = wb.verify_action(project, action, result_data)
-                if wb.save_action_verification(project_id, action_id, verification):
-                    _finish_job(job["id"], {"verified": True})
-                else:
-                    state = _schedule_retry(job, "Cílová služba změnu zatím nepotvrdila.", action_status="pending")
-                    if state == "failed":
+                # AI preparation jobs intentionally have no action_id yet: their
+                # purpose is to create actions. Handle them before requiring an
+                # action row.
+                if job["job_type"] == "seo_ai_prepare":
+                    try:
+                        payload = json.loads(job["payload_json"] or "{}")
+                    except Exception:
+                        payload = {}
+                    issue_ids = [int(x) for x in payload.get("issue_ids", []) if str(x).isdigit()]
+                    auto_apply = bool(payload.get("auto_apply"))
+                    if issue_ids:
                         conn = wb.db()
-                        conn.execute("UPDATE actions SET status='pending' WHERE id=?", (action_id,))
+                        marks = ",".join("?" for _ in issue_ids)
+                        rows = conn.execute(
+                            f"SELECT * FROM issues WHERE project_id=? AND status='open' AND id IN ({marks}) ORDER BY id",
+                            [project_id, *issue_ids]
+                        ).fetchall()
+                        conn.close()
+                    else:
+                        rows = []
+                    if not rows:
+                        _finish_job(job["id"], {"skipped": True, "reason": "issues_missing"})
+                    else:
+                        created, _ = wb.ai_prepare_issue_actions(project, rows, auto_apply=False)
+                        if auto_apply and created:
+                            wb.queue_seo_apply_jobs(project_id, created, kick=False, notify=False)
+                        _finish_job(job["id"], {"created_actions": created, "auto_apply": auto_apply})
+                        # Only the last AI chunk sends the summary notification.
+                        conn = wb.db()
+                        left = conn.execute(
+                            "SELECT COUNT(*) c FROM jobs WHERE project_id=? AND group_id=? AND job_type='seo_ai_prepare' AND status IN ('queued','running','retry')",
+                            (project_id, group_id)
+                        ).fetchone()["c"]
+                        conn.close()
+                        if not left:
+                            if auto_apply:
+                                msg = "SEO návrhy jsem dokončil a bezpečné změny jsem rovnou zařadil k provedení. Teď je postupně zapisuji přes Fresh Core a ověřuji na webu."
+                                wb.create_notification(
+                                    project_id, "Návrhy mám připravené", msg,
+                                    url=f"/projects/{project_id}/actions?view=todo", level="success", kind=f"ai_group_{group_id}", user_id=_row_get(job, "user_id")
+                                )
+                                wb.add_boban_message(project_id, msg, actions=[{"label":"Sledovat provedení","url":f"/projects/{project_id}/actions?view=todo","primary":True}])
+                            else:
+                                msg = "Dokončil jsem návrhy. Otevři Úkoly, kde je můžeš projít, označit a schválit."
+                                wb.create_notification(
+                                    project_id, "SEO návrhy jsou připravené", msg,
+                                    url=f"/projects/{project_id}/actions?view=todo", level="success", kind=f"ai_group_{group_id}", user_id=_row_get(job, "user_id")
+                                )
+                                wb.add_boban_message(project_id, msg, actions=[{"label":"Projít návrhy","url":f"/projects/{project_id}/actions?view=todo","primary":True}])
+                    processed += 1
+                    continue
+
+                if job["job_type"] == "seo_growth_prepare":
+                    try:
+                        payload = json.loads(job["payload_json"] or "{}")
+                    except Exception:
+                        payload = {}
+                    candidates = payload.get("candidates") or []
+                    created, skipped = wb.ai_prepare_growth_actions(project, candidates)
+                    _finish_job(job["id"], {"created_actions": created, "skipped": skipped})
+                    if created:
+                        msg = f"Z dat Search Console jsem prověřil {len(candidates)} růstové příležitosti a připravil {len(created)} konkrétní návrhy ke schválení. Tam, kde metadata nebyla správný zásah, jsem změnu nevyráběl naslepo."
+                        wb.create_notification(
+                            project_id, "Růstové návrhy jsou připravené", msg,
+                            url=f"/projects/{project_id}/actions?view=todo", level="success", kind=f"growth_done_{group_id}", user_id=_row_get(job, "user_id")
+                        )
+                        wb.add_boban_message(project_id, msg, actions=[{"label":"Projít návrhy","url":f"/projects/{project_id}/actions?view=todo","primary":True}])
+                    else:
+                        msg = "Růstové příležitosti ze Search Console jsem prověřil, ale nevytvořil jsem změnu jen pro změnu. U těchto stránek teď metadata nejsou bezpečně nejlepší zásah; nechávám je v pracovním plánu pro obsah/prolinkování."
+                        wb.add_boban_message(project_id, msg, actions=[{"label":"Zobrazit pracovní plán","url":f"/projects/{project_id}#boban-context","primary":True}])
+                    processed += 1
+                    continue
+
+                if not action:
+                    _finish_job(job["id"], {"skipped": True, "reason": "missing_action"})
+                    processed += 1
+                    continue
+
+                if job["job_type"] == "seo_verify_action":
+                    result_data = {}
+                    try:
+                        result_data = json.loads(action["result_json"] or "{}")
+                    except Exception:
+                        pass
+                    verification = wb.verify_action(project, action, result_data)
+                    if wb.save_action_verification(project_id, action_id, verification):
+                        _finish_job(job["id"], {"verified": True})
+                    else:
+                        state = _schedule_retry(job, "Cílová služba změnu zatím nepotvrdila.", action_status="pending")
+                        if state == "failed":
+                            conn = wb.db()
+                            conn.execute("UPDATE actions SET status='pending' WHERE id=?", (action_id,))
+                            conn.commit(); conn.close()
+                    processed += 1
+                    _group_notify_if_done(project_id, group_id, _row_get(job, "user_id"))
+                    continue
+
+                # Apply one action. Idempotent change_id wb-<action id> protects retries on Fresh Core 0.4.3+.
+                try:
+                    provider = _row_get(action, "provider", "fresh_core") or "fresh_core"
+                    baseline = wb.page_metrics_from_gsc(wb.latest_source_snapshot(project_id, "search_console"), action["target_url"]) if provider == "fresh_core" else {}
+                    result = wb.apply_action(project, action)
+                    conn = wb.db()
+                    conn.execute(
+                        """UPDATE actions SET status='applied',applied_at=?,result_json=?,baseline_metrics_json=?,last_error=NULL WHERE id=?""",
+                        (wb.now(), json.dumps(result, ensure_ascii=False), json.dumps(baseline or {}, ensure_ascii=False), action_id)
+                    )
+                    conn.commit(); conn.close()
+                    conn = wb.db(); fresh = conn.execute("SELECT * FROM actions WHERE id=?", (action_id,)).fetchone(); conn.close()
+                    verification = wb.verify_action(project, fresh, result)
+                    wb.save_action_verification(project_id, action_id, verification)
+                    _finish_job(job["id"], {"applied": True, "verified": bool(verification.get("rendered_confirmed"))})
+                except requests.exceptions.Timeout as exc:
+                    verification = wb.verify_action(project, action, None)
+                    if verification.get("rendered_confirmed"):
+                        conn = wb.db()
+                        conn.execute(
+                            "UPDATE actions SET status='verified',applied_at=COALESCE(applied_at,?),verification_json=?,verified_at=?,last_error=NULL WHERE id=?",
+                            (wb.now(), json.dumps(verification, ensure_ascii=False), wb.now(), action_id)
+                        )
                         conn.commit(); conn.close()
+                        _finish_job(job["id"], {"timeout_recovered": True, "verified": True})
+                    else:
+                        conn = wb.db()
+                        conn.execute(
+                            "UPDATE actions SET status='pending',last_error=?,verification_json=?,verified_at=? WHERE id=?",
+                            (str(exc)[:2000], json.dumps(verification, ensure_ascii=False), wb.now(), action_id)
+                        )
+                        conn.commit(); conn.close()
+                        _finish_job(job["id"], {"timeout": True, "pending_verification": True})
+                        _schedule_verify(project, action, group_id, _row_get(job, "user_id"), reason="write_timeout")
+                except Exception as exc:
+                    _schedule_retry(job, exc, action_status="queued")
+
                 processed += 1
                 _group_notify_if_done(project_id, group_id, _row_get(job, "user_id"))
-                continue
-
-            # Apply one action. Idempotent change_id wb-<action id> protects retries on Fresh Core 0.4.3+.
-            try:
-                provider = _row_get(action, "provider", "fresh_core") or "fresh_core"
-                baseline = wb.page_metrics_from_gsc(wb.latest_source_snapshot(project_id, "search_console"), action["target_url"]) if provider == "fresh_core" else {}
-                result = wb.apply_action(project, action)
-                conn = wb.db()
-                conn.execute(
-                    """UPDATE actions SET status='applied',applied_at=?,result_json=?,baseline_metrics_json=?,last_error=NULL WHERE id=?""",
-                    (wb.now(), json.dumps(result, ensure_ascii=False), json.dumps(baseline or {}, ensure_ascii=False), action_id)
-                )
-                conn.commit(); conn.close()
-                conn = wb.db(); fresh = conn.execute("SELECT * FROM actions WHERE id=?", (action_id,)).fetchone(); conn.close()
-                verification = wb.verify_action(project, fresh, result)
-                wb.save_action_verification(project_id, action_id, verification)
-                _finish_job(job["id"], {"applied": True, "verified": bool(verification.get("rendered_confirmed"))})
-            except requests.exceptions.Timeout as exc:
-                verification = wb.verify_action(project, action, None)
-                if verification.get("rendered_confirmed"):
-                    conn = wb.db()
-                    conn.execute(
-                        "UPDATE actions SET status='verified',applied_at=COALESCE(applied_at,?),verification_json=?,verified_at=?,last_error=NULL WHERE id=?",
-                        (wb.now(), json.dumps(verification, ensure_ascii=False), wb.now(), action_id)
-                    )
-                    conn.commit(); conn.close()
-                    _finish_job(job["id"], {"timeout_recovered": True, "verified": True})
-                else:
-                    conn = wb.db()
-                    conn.execute(
-                        "UPDATE actions SET status='pending',last_error=?,verification_json=?,verified_at=? WHERE id=?",
-                        (str(exc)[:2000], json.dumps(verification, ensure_ascii=False), wb.now(), action_id)
-                    )
-                    conn.commit(); conn.close()
-                    _finish_job(job["id"], {"timeout": True, "pending_verification": True})
-                    _schedule_verify(project, action, group_id, _row_get(job, "user_id"), reason="write_timeout")
             except Exception as exc:
                 _schedule_retry(job, exc, action_status="queued")
+                processed += 1
+            wb.touch_worker(WORKER_NAME, "running", {"phase": "actions", "processed": processed})
 
-            processed += 1
-            _group_notify_if_done(project_id, group_id, _row_get(job, "user_id"))
-        except Exception as exc:
-            _schedule_retry(job, exc, action_status="queued")
-            processed += 1
-        wb.touch_worker(WORKER_NAME, "running", {"phase": "actions", "processed": processed})
-
-    wb.touch_worker(WORKER_NAME, "idle", {"processed": processed})
+    wb.touch_worker("seo_queue", "idle", {"processed": processed})
     return processed
 
 
