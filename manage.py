@@ -774,6 +774,7 @@ def run_daily_sync(force=False, project_id=None, provider=None):
                 continue
             conn = wb.db()
             try:
+                sync_schedule.carry_pending_request(conn, wb.DB_BACKEND, pid, name, day)
                 state = sync_schedule.get_state(conn, pid, name, day)
                 requested = bool(state and state.get("status") == "requested")
                 if not (force or requested or wb.automation_rule_enabled(rule)):
