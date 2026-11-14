@@ -375,7 +375,7 @@
         name.append(make('strong',j.title||'Nepopsaná úloha'));
         name.append(make('small',j.purpose||''));
         name.append(make('small','Evidence #'+j.id+(j.action_id?' · akce #'+j.action_id:'')));
-        if(j.action_url && /^\\/projects\\/\\d+\\/actions\\?/.test(j.action_url)) {
+        if(j.action_url && /^\/projects\/\d+\/actions\?/.test(j.action_url)) {
           const link=make('a','Detail změny');
           link.href=j.action_url;
           name.append(link);
