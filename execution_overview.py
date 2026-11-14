@@ -108,8 +108,10 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
     view = [_work_item(j) for j in active[:8]]
     waiting = int(awaiting_approval or 0)
     total = len(active)
+    scheduler_known = bool(worker and worker.get("scheduler_confirmed"))
     title = ("Pracuji na schválených úkolech" if running and live else
              "Úkol právě běží, ale spojení s vykonavatelem nepotvrzeno" if running else
+             "Nemohu potvrdit automatické převzetí úkolů" if total and not scheduler_known else
              "Úkoly čekají na provedení" if total else
              f"Čekám na schválení {waiting} návrhů" if waiting else
              "Nemám nevyřízenou práci")
@@ -118,7 +120,9 @@ def overview(jobs, historic_rows, worker, awaiting_approval, global_ahead=0, now
         if running and live else
         "Poslední potvrzení činnosti chybí. Žádný termín zatím neslibuji."
         if running else
-        "Zařazené úkoly převezmu automaticky; nemusíš je ručně spouštět."
+        "Úkoly jsou připravené, ale nevidím čerstvé potvrzení automatického spouštění. Je nutná kontrola plánovače."
+        if total and not scheduler_known else
+        "Zařazené úkoly automaticky postupně převezmu, nemusíš je ručně spouštět."
         if total else
         "Další provedení vyžaduje tvoje rozhodnutí. Po schválení si úkol převezmu."
         if waiting else
