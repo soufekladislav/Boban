@@ -10482,6 +10482,17 @@ def _safe_diagnostic_manifest():
         try:
             rows=conn.execute("SELECT status, COUNT(*) AS n FROM jobs WHERE job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action') GROUP BY status").fetchall()
             result['scheduler']['seo_queue_counts']={str(r['status']):int(r['n']) for r in rows}
+            progress=job_monitor.stats(conn)
+            result['scheduler']['execution_progress']={
+                'active': progress['active'],
+                'completed_last_15_minutes': progress['completed_15m'],
+                'last_confirmed_completed_at': progress['last_completed'],
+                'last_started_at': progress['last_started'],
+                'oldest_waiting_at': progress['oldest_waiting']
+            }
+            result['scheduler']['planning_worker']=worker_state('boban_planner')
+            result['scheduler']['connector_probe_worker']=worker_state('connector_health')
+            result['scheduler']['daily_sync_worker']=worker_state('daily_sync')
         except Exception:
             result['scheduler']['seo_queue_counts_unavailable']=True
         projects=conn.execute('SELECT id FROM projects ORDER BY id LIMIT 100').fetchall()
@@ -10574,7 +10585,7 @@ def health():
         "database_ok": db_ok,
         "database_error": db_error,
         "worker": wstate,
-        "background_sync": "durable DB queue + detached worker + manage.py tick safety net"
+        "background_sync": "durable DB queue + work-queue cron; daily-sync, connector-heartbeat and boban-cycle are separate scheduled commands"
     }), (200 if db_ok else 503)
 
 
