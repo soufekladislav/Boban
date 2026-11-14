@@ -9692,9 +9692,24 @@ def api_notifications():
     items = [dict(r) for r in rows]
     q = queue_summary(project_id) if project_id else None
     worker = worker_state("seo_queue")
+    today = worker_runtime.prague_now().date().isoformat()
+    sync_rows = []
+    if project_id:
+        sync_conn = db()
+        try:
+            sync_rows = sync_schedule.latest_status(sync_conn, project_id, today)
+        finally:
+            sync_conn.close()
+    sync_worker = worker_state("daily_sync") if project_id else None
     return jsonify({"ok": True, "unread": int(unread), "items": items,
                     "worker": worker, "queue": q,
-                    "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None})
+                    "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None,
+                    "daily_sync": {
+                        "date": today,
+                        "runs": [{"provider": r["provider"], "status": r["status"],
+                                  "finished_at": r["finished_at"]} for r in sync_rows],
+                        "worker": sync_worker
+                    } if project_id else None})
 
 
 @app.route("/api/notifications/read", methods=["POST"])
@@ -9729,6 +9744,19 @@ def api_notifications_state():
         conn.close(); return jsonify({"ok": False, "error": "unknown action"}), 400
     conn.commit(); conn.close()
     return jsonify({"ok": True})
+
+
+@app.route("/projects/<int:project_id>/sync/run-now", methods=["POST"])
+@login_required
+def project_sync_run_now(project_id):
+    project_for_user(project_id)
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id)
+    flash("Požádal jsem o nové načtení dat. Stav jednotlivých zdrojů uvidíš průběžně v Konektorech."
+          if kicked else "Ruční synchronizaci se nepodařilo spustit; zkontroluj cron a worker.log.",
+          "info" if kicked else "error")
+    return redirect(url_for("connectors", project_id=project_id))
 
 
 @app.route("/projects/<int:project_id>/actions/process-now", methods=["POST"])
