@@ -5610,7 +5610,7 @@ def touch_worker(name="default", status="running", detail=None):
     conn.commit(); conn.close()
 
 
-def kick_background_worker(command="work-queue"):
+def kick_background_worker(command="work-queue", project_id=None, provider=None):
     """Request a whitelisted CLI subprocess; Popen is not evidence of completion.
 
     CLI flock serialises concurrent manual and cron workers on this host.
@@ -5625,6 +5625,15 @@ def kick_background_worker(command="work-queue"):
     args = commands.get(command)
     if not args:
         raise ValueError("Nepovolený příkaz workeru.")
+    args = list(args)
+    if project_id is not None:
+        if command not in {"daily-sync", "daily-sync-force"} or not str(project_id).isdigit():
+            raise ValueError("Neplatný projekt pro synchronizaci.")
+        args.extend(["--project", str(int(project_id))])
+    if provider is not None:
+        if command not in {"daily-sync", "daily-sync-force"} or provider not in {"core", "search_console", "ga4", "gtm", "pagespeed_crux"}:
+            raise ValueError("Nepovolený zdroj synchronizace.")
+        args.extend(["--provider", provider])
     try:
         venv = os.getenv("VIRTUAL_ENV", "").strip()
         venv_python = Path(venv) / "bin" / "python" if venv else None
@@ -7866,11 +7875,13 @@ def core_connect(project_id):
 @login_required
 def core_sync(project_id):
     project_for_user(project_id)
-    try:
-        sync_core(project_id)
-        flash("Fresh Core data byla znovu načtena.", "success")
-    except Exception as exc:
-        flash(f"Synchronizace selhala: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="core")
+    if kicked:
+        flash("Načítání core jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
+    else:
+        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
     return redirect(url_for("project", project_id=project_id))
 
 
@@ -10011,15 +10022,13 @@ def google_callback():
 @login_required
 def performance_sync(project_id):
     project_for_user(project_id)
-    try:
-        data = sync_pagespeed_crux(project_id)
-        mobile = data.get("mobile") or {}; crux = data.get("crux") or {}
-        msg = f"Výkon načten: mobile Lighthouse {mobile.get('performance_score') if mobile.get('performance_score') is not None else '—'}/100."
-        if crux.get("available"):
-            msg += f" CrUX p75: LCP {int(crux.get('lcp_ms') or 0)} ms, INP {int(crux.get('inp_ms') or 0)} ms, CLS {float(crux.get('cls') or 0):.3f}."
-        flash(msg, "success")
-    except Exception as exc:
-        flash(f"PageSpeed/CrUX synchronizace selhala: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="pagespeed_crux")
+    if kicked:
+        flash("Načítání pagespeed_crux jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
+    else:
+        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10042,11 +10051,13 @@ def gtm_container(project_id):
 @login_required
 def gtm_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_gtm(project_id); counts=data.get("counts") or {}
-        flash(f"GTM audit hotový: {counts.get('tags',0)} tagů, {counts.get('triggers',0)} triggerů, {counts.get('variables',0)} proměnných.", "success")
-    except Exception as exc:
-        flash(f"GTM audit selhal: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="gtm")
+    if kicked:
+        flash("Načítání gtm jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
+    else:
+        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10082,9 +10093,13 @@ def search_console_property(project_id):
 @login_required
 def search_console_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_search_console(project_id); cur=data.get("current") or {}; flash(f"Search Console načtena: {int(cur.get('clicks') or 0)} kliknutí, {int(cur.get('impressions') or 0)} impresí a {len(data.get('top_queries') or [])} dotazů.","success")
-    except Exception as exc: flash(f"Synchronizace Search Console selhala: {exc}","error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="search_console")
+    if kicked:
+        flash("Načítání search_console jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
+    else:
+        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
@@ -10174,9 +10189,13 @@ def ga4_property(project_id):
 @login_required
 def ga4_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_ga4(project_id); cur=data.get("current") or {}; flash(f"GA4 načtena: Organic Search {int(cur.get('sessions') or 0)} návštěv, {float(cur.get('keyEvents') or 0):.0f} klíčových událostí.","success")
-    except Exception as exc: flash(f"Synchronizace GA4 selhala: {exc}","error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="ga4")
+    if kicked:
+        flash("Načítání ga4 jsem zařadil k provedení. Průběh a případnou chybu sleduj v konektorech; spuštění procesu zatím není důkaz dokončení.", "info")
+    else:
+        flash("Proces synchronizace se nepodařilo spustit. Ověř cron a worker.log.", "error")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
