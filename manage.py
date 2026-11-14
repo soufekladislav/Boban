@@ -448,7 +448,7 @@ def process_seo_apply_jobs(limit_jobs=10):
                         _schedule_verify(project, fresh, group_id, _row_get(job, "user_id"), reason="readback_failed")
                         _finish_job(job["id"], {"applied": True, "verification_pending": True,
                                                 "verification_error_type": type(verify_exc).__name__})
-                except requests.exceptions.Timeout as exc:
+                except (requests.exceptions.Timeout, requests.exceptions.ConnectionError) as exc:
                     try:
                         verification = wb.verify_action(project, action, None)
                     except Exception as verify_exc:
