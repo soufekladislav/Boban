@@ -9,6 +9,7 @@
   <div class="panel-head"><div><span class="eyebrow">DATOVÉ SYNCHRONIZACE</span><h2>Ranní načítání a ruční obnova</h2></div></div>
   <p class="muted">Denní data aktualizuji po 05:00 (Europe/Prague). Chybový zdroj mohu opakovat samostatně. Ruční spuštění neblokuje stránku.</p>
   <p data-sync-summary role="status" aria-live="polite">Načítám dnešní protokol synchronizací…</p>
+  <p class="muted small" data-heartbeat-summary role="status">Ověřuji poslední dostupnost konektorů…</p>
   {% if current_user.can_edit %}<form method="post" action="{{ url_for('project_sync_run_now', project_id=project.id) }}"><button class="btn primary" type="submit">Znovu načíst data projektu</button></form>{% endif %}
 </section>
 <div class="connector-grid">
