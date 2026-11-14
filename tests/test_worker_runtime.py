@@ -79,6 +79,13 @@ class DailyStateTests(unittest.TestCase):
         self.assertEqual(len(sync_schedule.latest_status(self.conn, 3, today)), 2)
         self.assertIsNone(sync_schedule.get_state(self.conn, 3, "ga4", "2026-11-15"))
 
+    def test_manual_request_survives_midnight(self):
+        sync_schedule.record_state(self.conn, "sqlite", 3, "ga4", "2026-11-14", "requested")
+        self.assertTrue(sync_schedule.carry_pending_request(self.conn, "sqlite", 3, "ga4", "2026-11-15"))
+        self.conn.commit()
+        self.assertEqual(sync_schedule.get_state(self.conn, 3, "ga4", "2026-11-15")["status"], "requested")
+        self.assertEqual(sync_schedule.get_state(self.conn, 3, "ga4", "2026-11-14")["status"], "superseded")
+
     def test_restart_from_failure(self):
         today = "2026-11-14"
         for status in ("running", "failed", "running", "completed"):
