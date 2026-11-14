@@ -42,3 +42,54 @@ python manage.py work-queue-errors 3
 ## Omezení a návrat
 
 Souborový `flock` chrání procesy běžící na stejném hostu; pro více serverů by byla nutná databázová distribuovaná synchronizace. Nová struktura je aditivní. Při problému vrať zdrojové soubory ze zálohy, zachovej DB a `.env`; odstraň jen nové cron záznamy a obnov předchozí ověřené plánování.
+
+## Autonomní plánovač Bobana (P0 – po schválení už bez ručního startu)
+
+V cPanelu musí být aktivní **čtyři nezávislé úlohy**: fronta 1× za minutu,
+zdrojová data každých 5 minut s bránou 05:00 Europe/Prague, ověření konektorů
+každých 15 minut a `boban-cycle` každých 15 minut. Konkrétní příkazy vypíše
+`bash scripts/install_seo_worker_cron.sh`. Jejich vypsání **není instalace**.
+
+Zkontroluj, že projekt má aktivní oprávnění, Fresh Core a zvolený režim
+`specialist` nebo `autopilot` a kadenci jinou než `manual`.
+Výchozí kadence v existujících projektech může zůstat `twice_weekly`:
+každých 15 minut se pouze zjišťuje, zda už je další cyklus splatný.
+Neměň uživatelovu uloženou kadenci bez schválení.
+
+Plánovač nyní:
+1. Podle původních pravidel vyhodnocuje obchodní kontext a známé podklady.
+2. Před vytvářením návrhů kontroluje, kolik jich čeká na rozhodnutí.
+3. Připraví nanejvýš 4 nové kandidáty na cyklus a další cyklus pozastaví
+   při 8 rozpracovaných návrzích nebo probíhající AI přípravě.
+4. Nově vytvořené návrhy **nepublikuje**. Změny lze do fronty zapsat
+   pouze po výslovném schválení, které Boban již automaticky vykoná.
+5. Vykonávací fronta dá schváleným zápisům přednost před přípravou
+   dalších návrhů. Ověření zápisu zůstává zvláštním krokem.
+
+### Provozní test viditelnosti a odhadu
+
+- Na stránce projektu a Úkolů se zobrazuje karta „Boban pracuje pro tebe“.
+  Zobrazuje reálné položky, důvod, stav a případný další pokus; čas
+  dokončení je **odhad**, nikoliv garance.
+- Odhad minut se vypočítá jen při alespoň 3 dokončených měřených záznamech
+  pro každý aktivní typ úlohy a při nedávno potvrzeném běhu
+  `seo_queue`; při chybě nebo neznámém stavu se nevymýšlí.
+- Pokud je fronta neprázdná, ale cron nemá čerstvý heartbeat, uživatel
+  uvidí upozornění na nepotvrzené spuštění místo falešného „zpracovávám“.
+- Zkontroluj, že po schválení jedné změny vygeneruje Boban úlohu,
+  cron ji převezme do jedné minuty, a uživatel následně uvidí
+  „provádím“ → „ověřuji“ → „hotovo / potřebuji zásah“.
+  Běh konkrétního konektoru může trvat delší dobu a výsledek musí
+  odpovídat skutečnému zápisu v externí službě.
+- V administraci musí být vidět nová aktivita `boban_planner` i
+  `seo_queue`. Prázdná tabulka `connector_health` po více než
+  15 minutách od zapnutí cronu znamená, že kontrola konektorů
+  není doložená; zkontroluj `heartbeat_cron.log`.
+
+### Sledování po nasazení
+
+První den kontroluj `queue_cron.log`, `boban_cycle_cron.log`,
+`daily_cron.log` a `heartbeat_cron.log`. Pokud se žádný záznam
+neobjeví, nejdřív ověř naplánované příkazy a cestu k Pythonu.
+Nedeklaruj opravu dokončenou, dokud reálná produkční fronta
+neprojde alespoň jedním schváleným, provedeným a ověřeným úkolem.
