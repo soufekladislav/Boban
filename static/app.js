@@ -364,6 +364,18 @@
         document.querySelectorAll('[data-queue-activity]').forEach(el=>el.textContent=status+(jobText?' '+jobText+'.':'')+age);
         if ((data.queue.total || 0) === 0) document.querySelectorAll('[data-queue-card]').forEach(el => el.classList.add('queue-finished'));
       }
+      if (data.connector_health && document.querySelector('[data-heartbeat-summary]')) {
+        const states=data.connector_health;
+        const labels={core:'Fresh Core',search_console:'Search Console',ga4:'GA4',gtm:'GTM'};
+        const good=states.filter(x=>x.status==='ok');
+        const problems=states.filter(x=>x.status==='failed' || x.status==='needs_setup');
+        const last=states.reduce((out,x)=>!out || x.checked_at>out ? x.checked_at:out,'');
+        let message=states.length ? 'Ověřeno '+good.length+'/'+states.length+' konektorů.' :
+          'Konektory zatím nemají ověřený živý stav.';
+        if (problems.length) message+=' Nutná kontrola: '+problems.map(x=>labels[x.provider]||x.provider).join(', ')+'.';
+        if (last) message+=' Poslední kontrola: '+last.replace('T',' ')+'.';
+        document.querySelectorAll('[data-heartbeat-summary]').forEach(el=>el.textContent=message);
+      }
       if (data.daily_sync) {
         const ds = data.daily_sync;
         const runs = ds.runs || [];
