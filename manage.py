@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Web Booster worker / maintenance CLI.
+"""Boban command line: separate execution, decisions, sources and connectivity.
 
-Recommended cPanel cron safety net (every minute):
-    <VENV_PYTHON> /home2/.../webbooster.freshcrackers.cz/manage.py tick
+Install the four cron entries printed by scripts/install_seo_worker_cron.sh:
+- work-queue          every minute (approved jobs)
+- daily-sync          every five minutes, Prague-local 05:00 data gate
+- connector-heartbeat every fifteen minutes (read-only live probes)
+- boban-cycle         every fifteen minutes (bounded autonomous planning)
 
-The web app also performs a best-effort detached worker kick whenever work is queued.
-The database queue is authoritative, so a killed process can resume safely later.
+A best-effort detached HTTP kick is *not* a guarantee: the DB queue and
+server-side cron are the durable sources of execution truth.
 """
 import json
 import sys
