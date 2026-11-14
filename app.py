@@ -5835,8 +5835,11 @@ def boban_work_overview(project_id):
                ORDER BY id DESC LIMIT 220"""
         ).fetchall()
         awaiting = int(conn.execute(
-            """SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved','failed')""",
+            """SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved')""",
             (project_id,)
+        ).fetchone()["c"] or 0)
+        failed_actions = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status='failed'", (project_id,)
         ).fetchone()["c"] or 0)
         first = active[0]["id"] if active else 0
         ahead = int(conn.execute(
@@ -5855,7 +5858,7 @@ def boban_work_overview(project_id):
     )
     result = execution_overview.overview(
         [dict(row) for row in active], [dict(row) for row in history],
-        worker, awaiting, global_ahead=ahead
+        worker, awaiting, global_ahead=ahead, failed_actions=failed_actions
     )
     if full_count > len(active):
         result["total"] = full_count
