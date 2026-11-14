@@ -333,6 +333,77 @@
     list.querySelectorAll('[data-notification-dismiss]').forEach(btn => btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); notificationState(btn.dataset.notificationDismiss,'dismiss'); }));
   }
 
+  function renderJobLedger(monitor) {
+    if (!monitor || !Array.isArray(monitor.items)) return;
+    document.querySelectorAll('[data-job-ledger]').forEach(root => {
+      const text=(selector,value)=>{
+        const el=root.querySelector(selector);
+        if (el) el.textContent=value;
+      };
+      const stamp=value=>String(value||'—').replace('T',' ');
+      const summary=monitor.summary||{};
+      text('[data-job-movement]',(monitor.movement||{}).message||'Průběh zatím nelze ověřit.');
+      text('[data-job-active]','Rozpracováno: '+(summary.active||0));
+      text('[data-job-last-completed]','Poslední dokončení: '+stamp(summary.last_completed||'neověřeno'));
+      text('[data-job-last-started]','Poslední zahájení: '+stamp(summary.last_started||'neověřeno'));
+      text('[data-job-oldest-waiting]','Nejstarší čekající: '+stamp(summary.oldest_waiting||'žádný'));
+      const target=root.querySelector('[data-job-rows]');
+      if (!target) return;
+      const admin=Boolean(root.dataset.monitorUrl);
+      const signature=JSON.stringify(monitor.items.map(x=>[
+        x.id,x.status,x.created_at,x.started_at,x.updated_at,x.finished_at,x.title
+      ]));
+      if (target.dataset.signature===signature) return;
+      target.dataset.signature=signature;
+      target.replaceChildren();
+      const make=(tag,content)=>{
+        const el=document.createElement(tag);
+        el.textContent=String(content??'');
+        return el;
+      };
+      if (!monitor.items.length) {
+        const row=document.createElement('tr');
+        const td=make('td','Žádné úlohy v tomto výběru.');
+        td.colSpan=admin?7:6;
+        row.append(td);target.append(row);
+      }
+      for (const j of monitor.items) {
+        const row=document.createElement('tr');
+        row.dataset.jobId=j.id;
+        const name=document.createElement('td');
+        name.append(make('strong',j.title||'Nepopsaná úloha'));
+        name.append(make('small',j.purpose||''));
+        name.append(make('small','Evidence #'+j.id+(j.action_id?' · akce #'+j.action_id:'')));
+        if(j.action_url && /^\\/projects\\/\\d+\\/actions\\?/.test(j.action_url)) {
+          const link=make('a','Detail změny');
+          link.href=j.action_url;
+          name.append(link);
+        }
+        row.append(name);
+        if(admin) row.append(make('td',j.project_name||('Projekt #'+j.project_id)));
+        const state=document.createElement('td');
+        state.append(make('span',j.stage||j.status||'Neznámý stav'));
+        if(j.status==='retry' && j.run_after)
+          state.append(make('small','Další pokus: '+stamp(j.run_after)));
+        row.append(state);
+        for (const field of ['created_at','started_at','updated_at','finished_at'])
+          row.append(make('td',stamp(j[field])));
+        target.append(row);
+      }
+    });
+  }
+
+  async function refreshAdminJobLedger() {
+    const el=document.querySelector('[data-job-ledger][data-monitor-url]');
+    if(!el || document.hidden) return;
+    try {
+      const response=await fetch(el.dataset.monitorUrl,{headers:{'Accept':'application/json'}});
+      if(!response.ok) return;
+      const payload=await response.json();
+      if(payload.ok) renderJobLedger(payload.monitor);
+    } catch (_) {}
+  }
+
   async function fetchNotifications() {
     try {
       const q = new URLSearchParams();
@@ -345,6 +416,7 @@
       if (!res.ok) return;
       const data = await res.json();
       renderNotifications(data);
+      if (data.job_history) renderJobLedger(data.job_history);
       if (data.work) {
         const work = data.work;
         document.querySelectorAll('[data-boban-work]').forEach(card => {
@@ -461,7 +533,9 @@
 
   if (document.body) {
     fetchNotifications();
+    refreshAdminJobLedger();
     window.setInterval(fetchNotifications, 12000);
+    window.setInterval(refreshAdminJobLedger, 12000);
   }
 
   // v0.7.2 mobile carousels: compact KPI/data panels, swipe + light auto-rotation.
