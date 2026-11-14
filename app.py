@@ -9862,6 +9862,13 @@ def api_notifications():
     q = queue_summary(project_id) if project_id else None
     work = boban_work_overview(project_id) if project_id else None
     history = job_monitor_snapshot(project_id=project_id,limit=45) if project_id else None
+    if work is not None and history is not None:
+        actual=[{"id":j["id"],"title":j["title"],"why":j["purpose"],"status":j["status"],
+                 "stage":j["stage"],"retry_at":j["run_after"],
+                 "created_at":j["created_at"],"started_at":j["started_at"],
+                 "updated_at":j["updated_at"]}
+                for j in history["items"] if j["status"] in job_monitor.ACTIVE]
+        work["items"]=actual[:8]
     worker = worker_state("seo_queue")
     today = worker_runtime.prague_now().date().isoformat()
     sync_rows = []
