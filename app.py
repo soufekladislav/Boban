@@ -5704,8 +5704,12 @@ def queue_summary(project_id):
     """Latest batch progress; do not conflate pending jobs with completed tasks."""
     conn = db()
     latest = conn.execute(
-        "SELECT group_id FROM jobs WHERE project_id=? AND job_type LIKE ? AND group_id IS NOT NULL ORDER BY id DESC LIMIT 1",
-        (project_id, "seo_%")
+        """SELECT group_id FROM jobs
+           WHERE project_id=? AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+             AND group_id IS NOT NULL
+           GROUP BY group_id
+           ORDER BY MAX(CASE WHEN status IN ('queued','retry','running') THEN 1 ELSE 0 END) DESC,
+                    MAX(id) DESC LIMIT 1""", (project_id,)
     ).fetchone()
     data = {"queued": 0, "running": 0, "retry": 0, "failed": 0, "completed": 0, "canceled": 0,
             "total": 0, "count": 0, "percent": 100, "batch_total": 0, "batch_done": 0, "group_id": None}
@@ -5729,6 +5733,18 @@ def queue_summary(project_id):
     for r in pending: data[str(r["status"]).lower()] = int(r["c"])
     data["total"] = data["queued"] + data["running"] + data["retry"]
     data["count"] = data["total"]
+    current = conn.execute(
+        """SELECT id,job_type,status,attempts,run_after,updated_at,locked_at
+           FROM jobs WHERE project_id=?
+             AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+             AND status IN ('running','retry','queued')
+           ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'retry' THEN 1 ELSE 2 END, id LIMIT 1""",
+        (project_id,)
+    ).fetchone()
+    data["current_job"] = ({"id": current["id"], "job_type": current["job_type"],
+                            "status": current["status"], "attempts": current["attempts"],
+                            "retry_at": current["run_after"], "updated_at": current["updated_at"]}
+                           if current else None)
     conn.close()
     return data
 
@@ -7072,8 +7088,12 @@ def admin_automation_update(rule_key):
 @login_required
 @admin_required
 def admin_automation_run_now():
-    kicked = kick_background_worker("tick")
-    flash("Spustil jsem systémový tick na pozadí." if kicked else "Tick se nepodařilo spustit. Zkontroluj worker.log a cron.", "success" if kicked else "error")
+    choice = request.form.get("scope", "work-queue")
+    command = "daily-sync-force" if choice == "daily-sync-force" else "work-queue"
+    kicked = kick_background_worker(command)
+    flash("Požádal jsem server o spuštění. Výsledek ověř v průběhu úloh a protokolu synchronizací."
+          if kicked else "Spuštění procesu se nepotvrdilo. Prověř worker.log a cron.",
+          "info" if kicked else "error")
     return redirect(url_for("admin_console") + "#automation")
 
 
@@ -9639,6 +9659,8 @@ def action_verify(project_id, action_id):
 @login_required
 def api_notifications():
     project_id = request.args.get("project_id", type=int)
+    if project_id is not None:
+        project_for_user(project_id)
     conn = db()
     visible = "dismissed_at IS NULL AND (snoozed_until IS NULL OR snoozed_until<=?)"
     if project_id:
@@ -9658,7 +9680,10 @@ def api_notifications():
     conn.close()
     items = [dict(r) for r in rows]
     q = queue_summary(project_id) if project_id else None
-    return jsonify({"ok": True, "unread": int(unread), "items": items, "worker": worker_state(), "queue": q})
+    worker = worker_state("seo_queue")
+    return jsonify({"ok": True, "unread": int(unread), "items": items,
+                    "worker": worker, "queue": q,
+                    "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None})
 
 
 @app.route("/api/notifications/read", methods=["POST"])
@@ -9699,9 +9724,11 @@ def api_notifications_state():
 @login_required
 def actions_process_now(project_id):
     project_for_user(project_id)
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
     kicked = kick_background_worker("work-queue")
     if kicked:
-        flash("Spustil jsem zpracování fronty. Stránku můžeš klidně opustit; o výsledku tě upozorním.", "success")
+        flash("Požádal jsem server o spuštění fronty. Skutečný postup a případné chyby zobrazím v průběhu.", "info")
     else:
         flash("Nepodařilo se spustit worker přímo z aplikace. Fronta zůstává bezpečně uložená a čeká na serverový cron.", "error")
     return redirect(url_for("actions", project_id=project_id, view="todo"))
