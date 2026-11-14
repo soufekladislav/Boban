@@ -5,7 +5,7 @@ credentials or target write secrets. No schema changes or API writes.
 """
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 
 ACTIVE = {"queued", "running", "retry"}
 STATUSES = {"queued", "running", "retry", "failed", "completed", "canceled", "cancelled"}
@@ -154,8 +154,18 @@ def stats(conn, project_id=None):
                    MIN(CASE WHEN status IN ('queued','retry') THEN created_at END) AS oldest_waiting,
                    MAX(CASE WHEN status='failed' THEN finished_at END) AS last_failed
             FROM jobs {condition}""", values).fetchone()
+    recent_where = " WHERE status='completed' AND finished_at>=?"
+    recent_args = [(datetime.now()-timedelta(minutes=15)).isoformat(timespec="seconds")]
+    if project_id is not None:
+        recent_where += " AND project_id=?"
+        recent_args.append(int(project_id))
+    recent = int(conn.execute(
+        "SELECT COUNT(*) AS n FROM jobs" + recent_where,
+        tuple(recent_args)
+    ).fetchone()["n"] or 0)
     return {"counts": counts,
             "active": sum(counts.get(s, 0) for s in ACTIVE),
+            "completed_15m": recent,
             "last_completed": summary["last_completed"],
             "last_started": summary["last_started"],
             "oldest_waiting": summary["oldest_waiting"],
@@ -175,7 +185,11 @@ def movement_state(summary, worker, now=None, stale_after=180):
         return {"status": "unconfirmed", "message": "Nemám čerstvé potvrzení běhu plánovače. Fronta může čekat na cron.",
                 "cron_confirmed": False}
     if summary.get("counts", {}).get("running", 0):
-        return {"status": "running", "message": "Právě zpracovávám úlohu. Dokončení potvrdím samostatně.",
+        if worker and worker.get("status") == "running":
+            return {"status": "running", "message": "Zpracovávám úlohu; dokončení potvrdím samostatně.",
+                    "cron_confirmed": True}
+        return {"status": "unconfirmed_running",
+                "message": "Úloha je označená jako běžící, ale nemám čerstvé potvrzení jejího vykonávání.",
                 "cron_confirmed": True}
     return {"status": "pending", "message": "Plánovač reagoval, ale čekající úlohy ještě nemají potvrzené dokončení.",
             "cron_confirmed": True}
