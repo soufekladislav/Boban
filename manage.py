@@ -403,7 +403,11 @@ def process_seo_apply_jobs(limit_jobs=10):
 
                 # If the remote write was already accepted, only verify; NEVER re-apply
                 # after a crash during verification.
-                if action["status"] in ("applied", "pending", "verified", "completed"):
+                if action["status"] in ("verified", "completed"):
+                    _finish_job(job["id"], {"skipped_write": True, "already_verified": True})
+                    processed += 1
+                    continue
+                if action["status"] in ("applied", "pending"):
                     _schedule_verify(project, action, group_id, _row_get(job, "user_id"), reason="already_applied")
                     _finish_job(job["id"], {"skipped_write": True, "verification_queued": True})
                     processed += 1
