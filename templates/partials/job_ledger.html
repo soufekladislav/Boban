@@ -29,6 +29,7 @@
   <div class="job-ledger-status" aria-live="polite" data-job-movement>{{ job_monitor.movement.message }}</div>
   <div class="job-ledger-totals">
     <span data-job-active>Rozpracováno: {{ job_monitor.summary.active }}</span>
+    <span data-job-completed-recent>Dokončeno za 15 min: {{ job_monitor.summary.completed_15m }}</span>
     <span data-job-last-completed>Poslední dokončení: {{ (job_monitor.summary.last_completed or 'neověřeno').replace('T',' ') }}</span>
     <span data-job-last-started>Poslední zahájení: {{ (job_monitor.summary.last_started or 'neověřeno').replace('T',' ') }}</span>
     <span data-job-oldest-waiting>Nejstarší čekající: {{ (job_monitor.summary.oldest_waiting or 'žádný').replace('T',' ') }}</span>
