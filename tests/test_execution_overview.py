@@ -30,6 +30,15 @@ class ExecutionOverviewTests(unittest.TestCase):
         view2=ex.overview(work,history[:2],live,0,now=NOW)
         self.assertIsNone(view2["eta"])
 
+    def test_eta_respects_minute_cron_three_jobs_per_run(self):
+        many=[job(i) for i in range(1,13)]
+        history=[historic(seconds=2)] * 5
+        view=ex.overview(many,history,
+                         {"status":"idle","healthy":False,"scheduler_confirmed":True},
+                         0,now=NOW)
+        self.assertGreaterEqual(view["eta"]["min_minutes"],3)
+        self.assertGreaterEqual(view["eta"]["max_minutes"],view["eta"]["min_minutes"])
+
     def test_missing_cron_never_promises_time(self):
         view=ex.overview([job(1)], [historic(seconds=35)]*4,
                          {"status":"idle","healthy":False,"scheduler_confirmed":False},
