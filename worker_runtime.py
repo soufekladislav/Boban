@@ -77,11 +77,14 @@ def daily_due(state, local_now=None, force=False):
     runs may repeat completed syncs, but never overtake an in-progress one.
     """
     local_now = local_now or prague_now()
+    status = str((state or {}).get("status") or "")
+    # An explicit manual request is durable and may run before 05:00.
+    if status == "requested":
+        return True
     if not force and local_now.hour < 5:
         return False
     if not state:
         return True
-    status = str(state.get("status") or "")
     if status == "completed" and not force:
         return False
     stamp = state.get("started_at")
