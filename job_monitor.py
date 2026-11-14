@@ -47,7 +47,7 @@ def title_for(row, issue_titles=None):
         return issue
     parsed = _parse(row.get("payload_json"))
     issue_ids = parsed.get("issue_ids") or []
-    if isinstance(issue_ids, list) and issue_titles:
+    if isinstance(issue_ids, list) and issue_titles and row.get("project_id") is not None:
         titles = [clean_text(issue_titles.get((int(row["project_id"]), int(v))), 95)
                   for v in issue_ids[:4] if str(v).isdigit()]
         titles = [v for v in titles if v]
