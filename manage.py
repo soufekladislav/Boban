@@ -629,23 +629,112 @@ def operator_cycles_due():
     return ran
 
 
+def run_daily_sync(force=False, project_id=None, provider=None):
+    """Collect business data once per Europe/Prague day, at/after 05:00.
+
+    Every source has its own durable state, so one failed API will not block
+    successful sources. Explicit manual runs bypass the daily success gate.
+    """
+    local_now = worker_runtime.prague_now()
+    if not force and local_now.hour < 5:
+        print("DAILY SYNC: čekám na 05:00 Europe/Prague")
+        return {"skipped": "before_05"}
+    day = local_now.date().isoformat()
+    result = {"date": day, "completed": 0, "failed": 0, "skipped": 0}
+    for project in list_projects():
+        pid = int(project["id"])
+        if project_id is not None and pid != int(project_id):
+            continue
+        if not wb.project_automation_allowed(pid):
+            result["skipped"] += 1
+            continue
+        specs = [
+            ("core", "core_sync", bool(_row_get(project, "core_manifest_url")), lambda: wb.auto_sync_core_project(pid)),
+            ("search_console", "search_console_sync", bool((i := wb.integration_row(pid, "search_console")) and i["status"] == "connected"), lambda: wb.sync_search_console(pid)),
+            ("ga4", "ga4_sync", bool((i := wb.integration_row(pid, "ga4")) and i["status"] == "connected"), lambda: wb.sync_ga4(pid)),
+            ("gtm", "gtm_sync", bool((i := wb.integration_row(pid, "gtm")) and i["status"] == "connected" and wb.integration_config(i).get("selected_container")), lambda: wb.sync_gtm(pid)),
+            ("pagespeed_crux", "pagespeed_crux_sync", bool(wb.pagespeed_ready()), lambda: wb.sync_pagespeed_crux(pid)),
+        ]
+        for name, rule, connected, perform in specs:
+            if provider and provider != name:
+                continue
+            if not connected or not wb.automation_rule_enabled(rule):
+                result["skipped"] += 1
+                continue
+            conn = wb.db()
+            try:
+                state = sync_schedule.get_state(conn, pid, name, day)
+                if not worker_runtime.daily_due(state, local_now, force=force):
+                    result["skipped"] += 1
+                    continue
+                sync_schedule.record_state(conn, wb.DB_BACKEND, pid, name, day, "running")
+                conn.commit()
+            finally:
+                conn.close()
+            started = wb.now()
+            wb.touch_worker("daily_sync", "running", {
+                "phase": name, "project_id": pid, "started_at": started
+            })
+            try:
+                data = perform()
+                conn = wb.db()
+                try:
+                    sync_schedule.record_state(conn, wb.DB_BACKEND, pid, name, day, "completed")
+                    conn.commit()
+                finally:
+                    conn.close()
+                wb.mark_automation_run(pid, rule, "completed")
+                safe_result = {"date": day, "source": name}
+                if isinstance(data, dict) and isinstance(data.get("period"), dict):
+                    safe_result["period"] = data["period"]
+                log_job(pid, "daily_sync_" + name, "completed", result=safe_result, started_at=started)
+                result["completed"] += 1
+                print(f"DAILY SYNC: projekt={pid} zdroj={name} dokončeno")
+            except Exception as exc:
+                error = type(exc).__name__ + ": " + str(exc)[:240]
+                conn = wb.db()
+                try:
+                    sync_schedule.record_state(conn, wb.DB_BACKEND, pid, name, day, "failed", error=error)
+                    conn.commit()
+                finally:
+                    conn.close()
+                wb.mark_automation_run(pid, rule, "failed", error)
+                log_job(pid, "daily_sync_" + name, "failed", result={"date": day, "source": name, "error": error}, started_at=started)
+                result["failed"] += 1
+                print(f"DAILY SYNC: projekt={pid} zdroj={name} chyba={type(exc).__name__}")
+    wb.touch_worker("daily_sync", "idle", {"processed": result["completed"] + result["failed"]})
+    print("DAILY SYNC: " + json.dumps(result, ensure_ascii=False))
+    return result
+
+
+def locked_daily_sync(force=False, project_id=None, provider=None):
+    with worker_runtime.exclusive_lock(wb.BASE_DIR / ".daily-sync.lock") as acquired:
+        if not acquired:
+            print("DAILY SYNC: jiný proces už provádí synchronizaci; nic nového nespouštím")
+            return {"skipped": "already_running"}
+        return run_daily_sync(force=force, project_id=project_id, provider=provider)
+
+
+def locked_work_queue():
+    with worker_runtime.exclusive_lock(wb.BASE_DIR / ".seo-worker.lock") as acquired:
+        if not acquired:
+            print("SEO QUEUE: jiný worker už běží; ponechávám úkoly v bezpečné frontě")
+            return False
+        work_queue()
+        return True
+
+
 def tick():
-    wb.touch_worker(WORKER_NAME, "running", {"phase": "tick"})
-    recovered = recover_stale_jobs()
-    migrated = migrate_legacy_queue()
-    seo_jobs = process_seo_apply_jobs(limit_jobs=10)
-    verified = verify_applied_actions()
-    changed = core_sync_all()
-    gsc = gsc_sync_due()
-    ga4 = ga4_sync_due()
-    perf = performance_sync_due()
-    gtm = gtm_sync_due()
+    """Compatibility scheduler: never download analytics twice daily or race the SEO worker."""
+    wb.touch_worker("scheduler", "running", {"phase": "tick"})
+    locked_work_queue()
+    daily = locked_daily_sync()
     crawl = seo_crawl_due()
     operator = operator_cycles_due()
     catalogs = wb.catalog_workflow_all(limit=5)
     emails = process_email_outbox()
-    wb.touch_worker(WORKER_NAME, "idle", {"action_jobs": seo_jobs, "verified": verified, "core_changed": changed, "gsc": gsc, "ga4": ga4, "performance": perf, "gtm": gtm, "crawl": crawl, "operator": operator, "emails": emails, "catalogs": catalogs})
-    print(f"tick complete; recovered={recovered}, migrated={migrated}, action_jobs={seo_jobs}, verified={verified}, core_changed={changed}, gsc_synced={gsc}, ga4_synced={ga4}, performance_synced={perf}, gtm_synced={gtm}, seo_crawls={crawl}, operator_cycles={operator}, emails_sent={emails}")
+    wb.touch_worker("scheduler", "idle", {"phase": "tick"})
+    print(f"tick complete: daily={daily}, crawl={crawl}, operator={operator}, catalogs={catalogs}, emails={emails}")
 
 
 def work_queue_errors(project_id=3, limit=20):
@@ -844,8 +933,24 @@ def main():
     cmd = sys.argv[1] if len(sys.argv) > 1 else "tick"
     if cmd == "tick":
         tick()
-    elif cmd == "work-queue":
-        work_queue()
+    elif cmd in ("work-queue", "seo-apply"):
+        locked_work_queue()
+    elif cmd == "daily-sync":
+        flags = sys.argv[2:]
+        force = "--force" in flags
+        def option(name):
+            if name not in flags:
+                return None
+            idx = flags.index(name) + 1
+            if idx >= len(flags):
+                raise SystemExit("Chybí hodnota pro " + name)
+            return flags[idx]
+        project_value = option("--project")
+        project_id = int(project_value) if project_value is not None else None
+        provider = option("--provider")
+        if provider is not None and provider not in ("core", "search_console", "ga4", "gtm", "pagespeed_crux"):
+            raise SystemExit("Nepodporovaný zdroj synchronizace.")
+        locked_daily_sync(force=force, project_id=project_id, provider=provider)
     elif cmd == "work-queue-errors":
         project_id = int(sys.argv[2]) if len(sys.argv)>2 else 3
         print(json.dumps(work_queue_errors(project_id), ensure_ascii=False, indent=2))
@@ -857,15 +962,10 @@ def main():
         core_sync_all()
     elif cmd == "verify":
         verify_applied_actions()
-    elif cmd == "seo-apply":
-        process_seo_apply_jobs(limit_jobs=20)
     elif cmd == "analytics-sync":
         # Read-only analytical API collection; unlike tick this never applies SEO edits.
-        totals=(gsc_sync_due(),ga4_sync_due(),gtm_sync_due(),performance_sync_due(),merchant_organic_sync_due())
-        print('analytics sync: GSC={} GA4={} GTM={} performance={} merchant_organic={}'.format(*totals))
-        print('--- Podrobný stav (0 znamená žádný nový úspěšný běh, nikoliv chybu) ---')
-        for line in sync_reporting.summary(wb,list_projects()): print(line)
-        if not totals[4]: print('merchant_organic: 0 nových reportů (může jít o interval, chybějící data nebo nesplněné podmínky; ověř v Statistikách).')
+        locked_daily_sync(force=True)
+        print("Ruční analytics-sync proběhl přes stejnou serializovanou a evidovanou cestu jako denní sync.")
     elif cmd == "analytics-backfill":
         print("Materialized observations:", analytics_backfill())
     elif cmd == "gsc-sync":
@@ -883,7 +983,7 @@ def main():
     elif cmd == "doctor":
         doctor()
     else:
-        raise SystemExit("Usage: python manage.py [tick|work-queue|work-queue-status|work-queue-errors|analytics-sync|analytics-backfill|core-sync|seo-apply|verify|gsc-sync|ga4-sync|performance-sync|gtm-sync|operator|catalog-sync|doctor]")
+        raise SystemExit("Usage: python manage.py [tick|daily-sync [--force] [--project ID] [--provider NAME]|work-queue|work-queue-status|work-queue-errors|analytics-sync|analytics-backfill|core-sync|seo-apply|verify|gsc-sync|ga4-sync|performance-sync|gtm-sync|operator|catalog-sync|doctor]")
 
 
 if __name__ == "__main__":
