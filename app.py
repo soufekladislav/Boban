@@ -40,6 +40,7 @@ import advisor_intelligence
 import worker_runtime
 import sync_schedule
 import connector_health
+import execution_overview
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -5806,6 +5807,63 @@ def queue_summary(project_id):
     return data
 
 
+def boban_work_overview(project_id):
+    """What Boban does, why and when, without exposing raw DB jobs to the user."""
+    conn = db()
+    try:
+        active = conn.execute(
+            """SELECT j.id,j.action_id,j.project_id,j.job_type,j.status,j.run_after,
+                      j.created_at,j.started_at,j.updated_at,
+                      a.reason AS action_reason,a.target_url
+               FROM jobs j LEFT JOIN actions a ON a.id=j.action_id AND a.project_id=j.project_id
+               WHERE j.project_id=? AND j.job_type IN
+                 ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+                 AND j.status IN ('queued','running','retry')
+               ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END,
+                        CASE j.job_type WHEN 'seo_apply_action' THEN 0 WHEN 'seo_verify_action' THEN 1 ELSE 2 END,
+                        j.id LIMIT 250""", (project_id,)
+        ).fetchall()
+        full_count = int(conn.execute(
+            """SELECT COUNT(*) AS c FROM jobs WHERE project_id=?
+               AND job_type IN ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+               AND status IN ('queued','running','retry')""", (project_id,)
+        ).fetchone()["c"] or 0)
+        history = conn.execute(
+            """SELECT job_type,started_at,finished_at FROM jobs
+               WHERE job_type IN ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+                 AND status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL
+               ORDER BY id DESC LIMIT 220"""
+        ).fetchall()
+        awaiting = int(conn.execute(
+            """SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved','failed')""",
+            (project_id,)
+        ).fetchone()["c"] or 0)
+        first = active[0]["id"] if active else 0
+        ahead = int(conn.execute(
+            """SELECT COUNT(*) AS c FROM jobs
+               WHERE id<? AND project_id<>? AND job_type IN
+                 ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+                 AND status IN ('queued','running','retry') AND (run_after IS NULL OR run_after<=?)""",
+            (first, project_id, now())
+        ).fetchone()["c"] or 0) if first else 0
+    finally:
+        conn.close()
+    worker = worker_state("seo_queue")
+    worker["scheduler_confirmed"] = bool(
+        worker.get("age_seconds") is not None and worker["age_seconds"] <= 140
+        and worker["status"] in {"running", "idle"}
+    )
+    result = execution_overview.overview(
+        [dict(row) for row in active], [dict(row) for row in history],
+        worker, awaiting, global_ahead=ahead
+    )
+    if full_count > len(active):
+        result["total"] = full_count
+        result["eta"] = None
+        result["eta_confidence"] = "too_many_jobs_to_estimate"
+    return result
+
+
 def queue_ai_prepare_jobs(project_id, issue_rows, auto_apply=False, source="user"):
     issue_ids = [int(r["id"]) for r in issue_rows]
     if not issue_ids:
@@ -9747,6 +9805,7 @@ def api_notifications():
     conn.close()
     items = [dict(r) for r in rows]
     q = queue_summary(project_id) if project_id else None
+    work = boban_work_overview(project_id) if project_id else None
     worker = worker_state("seo_queue")
     today = worker_runtime.prague_now().date().isoformat()
     sync_rows = []
@@ -9765,7 +9824,7 @@ def api_notifications():
         finally:
             health_conn.close()
     return jsonify({"ok": True, "unread": int(unread), "items": items,
-                    "worker": worker, "queue": q,
+                    "worker": worker, "queue": q, "work": work,
                     "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None,
                     "connector_health": [
                         {"provider": r["provider"], "status": r["status"],
