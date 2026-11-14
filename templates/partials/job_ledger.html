@@ -1,0 +1,61 @@
+<section class="card job-ledger" data-job-ledger
+  {% if job_monitor_url is defined %}data-monitor-url="{{ job_monitor_url }}"{% endif %}
+  aria-label="Přehled práce Bobana">
+  <div class="panel-head">
+    <div><span class="eyebrow">PRŮBĚH PRÁCE</span>
+      <h2>{{ 'Přehled práce napříč projekty' if job_monitor_admin|default(false) else 'Co Boban skutečně vykonává' }}</h2>
+      <p class="muted">Každý řádek je skutečný záznam v databázi. Zahájení a dokončení jsou odlišné události; požadavek v AI Engine není automaticky dokončený úkol.</p>
+    </div>
+  </div>
+  {% if job_monitor_admin|default(false) %}
+  <form action="{{ url_for('admin_console') }}" method="get" class="job-ledger-filters">
+    <label>Projekt
+      <select name="jobs_project">
+        <option value="">Všechny</option>
+        {% for p in projects %}<option value="{{ p.id }}" {% if jobs_filter_project==p.id %}selected{% endif %}>{{ p.name }}</option>{% endfor %}
+      </select>
+    </label>
+    <label>Stav
+      <select name="jobs_status">
+        <option value="">Všechny</option>
+        {% for key,label in [('queued','Čeká'),('running','Probíhá'),('retry','Opakování'),('failed','Chyba'),('completed','Dokončeno'),('canceled','Zrušeno')] %}
+        <option value="{{ key }}" {% if jobs_filter_status==key %}selected{% endif %}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn small-btn" type="submit">Filtrovat</button>
+  </form>
+  {% endif %}
+  <div class="job-ledger-status" aria-live="polite" data-job-movement>{{ job_monitor.movement.message }}</div>
+  <div class="job-ledger-totals">
+    <span data-job-active>Rozpracováno: {{ job_monitor.summary.active }}</span>
+    <span data-job-last-completed>Poslední dokončení: {{ (job_monitor.summary.last_completed or 'neověřeno').replace('T',' ') }}</span>
+    <span data-job-last-started>Poslední zahájení: {{ (job_monitor.summary.last_started or 'neověřeno').replace('T',' ') }}</span>
+    <span data-job-oldest-waiting>Nejstarší čekající: {{ (job_monitor.summary.oldest_waiting or 'žádný').replace('T',' ') }}</span>
+  </div>
+  <div class="table-responsive job-ledger-table-wrap">
+    <table class="job-ledger-table">
+      <thead><tr>
+        <th>Práce Bobana</th>
+        {% if job_monitor_admin|default(false) %}<th>Projekt</th>{% endif %}
+        <th>Stav</th><th>Zařazeno</th><th>Spuštěno</th><th>Poslední aktivita</th><th>Dokončeno</th>
+      </tr></thead>
+      <tbody data-job-rows>
+      {% for j in job_monitor.items %}
+        <tr data-job-id="{{ j.id }}">
+          <td><strong>{{ j.title }}</strong><small>{{ j.purpose }}</small><small>Evidence #{{ j.id }}{% if j.action_id %} · akce #{{ j.action_id }}{% endif %}{% if j.action_url %} · <a href="{{ j.action_url }}">Detail změny</a>{% endif %}</small></td>
+          {% if job_monitor_admin|default(false) %}<td>{{ j.project_name or 'Projekt #' ~ j.project_id }}</td>{% endif %}
+          <td><span class="badge {{ j.status }}">{{ j.stage }}</span>{% if j.status=='retry' and j.run_after %}<small>Opakování: {{ j.run_after.replace('T',' ') }}</small>{% endif %}</td>
+          <td>{{ (j.created_at or '—').replace('T',' ') }}</td>
+          <td>{{ (j.started_at or '—').replace('T',' ') }}</td>
+          <td>{{ (j.updated_at or '—').replace('T',' ') }}</td>
+          <td>{{ (j.finished_at or '—').replace('T',' ') }}</td>
+        </tr>
+      {% else %}
+        <tr><td colspan="{{ 7 if job_monitor_admin|default(false) else 6 }}">V tomto výběru nejsou evidované žádné úlohy.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  <p class="muted small">Zobrazuji poslední relevantní záznamy, ne všechny historické úlohy. Pokud plánovač neposílá čerstvé potvrzení, nelze z pouhého zařazení do fronty usuzovat, že Boban právě pracuje. Časy jsou zaznamenané aplikací.</p>
+</section>
