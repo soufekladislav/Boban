@@ -12,14 +12,16 @@
   <a class="tab {{ 'active' if view=='all' }}" href="{{ url_for('actions', project_id=project.id, view='all') }}">Vše <b>{{ counts.total_count or 0 }}</b></a>
 </div>
 
-{% if view=='todo' and queue.total and not worker.healthy %}
+{% if view=='todo' and queue.running and not worker.healthy %}
 <div class="info-block wide-info" role="status"><div><b>SEO worker není potvrzen jako aktivní</b><span>
-{{ queue.total }} úloh čeká nebo se zpracovává, ale poslední odezva SEO workeru chybí nebo je stará.
+{{ queue.running }} úloh je označených jako běžící, ale chybí čerstvé potvrzení workeru. Při dalším běhu cron prověří jejich stav.
 Prověř naplánování <code>manage.py work-queue</code> a jeho log. Úkoly bez schválení se nepublikují.
 </span></div></div>
 {% endif %}
-{% if view=='todo' and queue.batch_total %}
-<div class="queue-status queue-progress-card" data-queue-card data-project-id="{{ project.id }}"><div class="queue-progress-copy"><span class="live-dot"></span><strong data-queue-label>{{ ('Úlohy čekají – worker nepracuje' if not worker.healthy else 'Úlohy čekají / probíhají') if queue.total else ('Některé úkoly skončily chybou' if queue.failed else 'Poslední dávka dokončena') }}</strong><p>Dokončeno <b data-queue-done>{{ queue.batch_done }}</b> z <b data-queue-total>{{ queue.batch_total }}</b> skupin úkolů. <span data-queue-errors>{% if queue.failed %}Chyb: {{ queue.failed }}.{% endif %}</span> Změny vyžadující schválení se nepublikují samy.</p><div class="progress-track" role="progressbar" aria-label="Průběh úkolů" aria-valuenow="{{ queue.percent }}" aria-valuemin="0" aria-valuemax="100" data-queue-progress><div style="width:{{ queue.percent }}%" data-queue-fill></div></div><small data-queue-pct>{{ queue.percent }} %</small></div></div>
+{% if view=='todo' and (queue.batch_total or queue.total) %}
+<div class="queue-status queue-progress-card" data-queue-card data-project-id="{{ project.id }}"><div class="queue-progress-copy"><span class="live-dot"></span><strong data-queue-label>{{ ('Úlohy čekají – worker nepracuje' if not worker.healthy else 'Úlohy čekají / probíhají') if queue.total else ('Některé úkoly skončily chybou' if queue.failed else 'Poslední dávka dokončena') }}</strong><p>Dokončeno <b data-queue-done>{{ queue.batch_done }}</b> z <b data-queue-total>{{ queue.batch_total }}</b> skupin úkolů. <span data-queue-errors>{% if queue.failed %}Chyb: {{ queue.failed }}.{% endif %}</span> Změny vyžadující schválení se nepublikují samy.</p><div class="progress-track" role="progressbar" aria-label="Průběh úkolů" aria-valuenow="{{ queue.percent }}" aria-valuemin="0" aria-valuemax="100" data-queue-progress><div style="width:{{ queue.percent }}%" data-queue-fill></div></div><small data-queue-pct>{{ queue.percent }} %</small><p class="muted small" data-queue-activity aria-live="polite">{{ 'Právě pracuji na úloze.' if queue.running and worker.healthy else ('Čekám na bezpečné opakování úlohy.' if queue.retry else ('Úlohy čekají na spuštění.' if queue.total else 'Aktuální dávka už neběží.')) }}</p>
+{% if current_user.can_edit and queue.total %}<form method="post" action="{{ url_for('actions_process_now', project_id=project.id) }}"><button type="submit" class="btn small-btn">Prověřit a spustit frontu</button></form>{% endif %}
+</div></div>
 {% endif %}
 
 <div class="info-block wide-info"><div><b>Workflow</b><span>Analýza → Bobanův návrh → tvoje úprava → publikace → ověření cílovou službou + měření dopadu → měření dopadu. AI návrh není automaticky finální text.</span></div></div>
