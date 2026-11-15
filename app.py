@@ -5314,6 +5314,10 @@ def save_write_connector(project_id, endpoint, key):
     conn.close()
 
 
+class FreshCorePermanentError(ValueError):
+    """Target missing, forbidden or ambiguous: never silently retry a write."""
+
+
 def apply_seo_action(project, action):
     if project["core_write_status"] != "connected":
         raise ValueError("Fresh Core write bridge není připojen.")
@@ -5337,6 +5341,13 @@ def apply_seo_action(project, action):
             "change_id": f"wb-{action['id']}",
             "changes": proposed,
         }
+        target_url = str(action["target_url"] or "").strip()
+        if target_url:
+            target = safe_http_url(target_url)
+            if normalize_host(target) != normalize_host(project["site_url"]):
+                raise FreshCorePermanentError(
+                    "Úkol míří na jiný web než připojený projekt. Zápis jsem zastavil.")
+            payload["target_url"] = target
     r = requests.post(
         endpoint,
         json=payload,
@@ -5345,6 +5356,16 @@ def apply_seo_action(project, action):
     )
     data = r.json() if "application/json" in r.headers.get("content-type", "") else {"raw": r.text[:1000]}
     if r.status_code >= 300 or not data.get("success"):
+        code = str(data.get("code") or "")
+        details = data.get("data") or {}
+        details = details if isinstance(details, dict) else {}
+        if code in {"fresh_core_seo_post", "fresh_core_seo_url_not_found",
+                    "fresh_core_seo_url_invalid", "fresh_core_seo_post_id",
+                    "fresh_core_seo_target_mismatch"} or details.get("permanent") is True:
+            raise FreshCorePermanentError(
+                "Cílový produkt nebo stránku se nepodařilo bezpečně dohledat. "
+                "Zkontroluj URL a WordPress ID; po opravě můžeš úkol znovu schválit. "
+                f"(Fresh Core: {code or 'neplatný cíl'}, HTTP {r.status_code})")
         raise ValueError(f"Fresh Core změnu odmítl: HTTP {r.status_code}: {data}")
     return data
 
