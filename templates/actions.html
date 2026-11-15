@@ -31,6 +31,11 @@
       <div class="task-content-clean">
         <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>{{ a.display_title }}</strong> <small class="muted">#{{ a.id }}</small> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
         {% if a.target_url %}<div class="muted small task-url-text">{{ a.target_url }}</div>{% endif %}
+        <div class="muted small task-intent" style="margin:6px 0 8px;line-height:1.55">
+          {% if a.reason %}<div><strong>Proč:</strong> {{ a.reason|truncate(260) }}</div>{% endif %}
+          {% if a.expected_outcome and a.expected_outcome != a.reason %}<div><strong>Očekávaný výsledek:</strong> {{ a.expected_outcome|truncate(250) }}</div>{% endif %}
+          {% if a.status == 'failed' and a.visible_error %}<div role="alert"><strong>Co brání dokončení:</strong> {{ a.visible_error|truncate(270) }}</div>{% endif %}
+        </div>
         <div class="muted small task-dates">
           <span>Vytvořeno {{ (a.created_at or '—').replace('T',' ') }}</span>
           {% if a.approved_at %}<span> · Schváleno {{ a.approved_at.replace('T',' ') }}</span>{% endif %}
