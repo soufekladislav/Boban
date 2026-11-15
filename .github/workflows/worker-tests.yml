@@ -5,6 +5,7 @@ on:
       - fix/worker-daily-sync-progress-20261114
       - feature/boban-autonomous-execution-eta-20261114
       - fix/visible-task-ledger-20261114
+      - fix/seo-target-recovery-task-labels-20261115
   pull_request:
     paths:
       - 'manage.py'
@@ -18,6 +19,7 @@ on:
       - 'execution_overview.py'
       - 'job_monitor.py'
       - 'tests/test_job_monitor.py'
+      - 'tests/test_seo_target_recovery.py'
       - 'templates/partials/job_ledger.html'
       - 'templates/admin.html'
       - 'templates/actions.html'
@@ -43,6 +45,7 @@ jobs:
           python -m unittest discover -s tests -p 'test_connector_health.py' -v
           python -m unittest discover -s tests -p 'test_execution_overview.py' -v
           python -m unittest discover -s tests -p 'test_job_monitor.py' -v
+          python -m unittest discover -s tests -p 'test_seo_target_recovery.py' -v
           python -m unittest discover -s tests -p 'test_seo_queue_worker_22.py' -v
       - name: Existing regression suite
         run: python -m unittest discover -s tests -v
