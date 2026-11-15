@@ -45,7 +45,7 @@ class LedgerTests(unittest.TestCase):
     def test_real_issue_title_and_actual_timestamps(self):
         rows=job_monitor.load_jobs(self.conn,project_id=3)
         item=next(x for x in rows if x['id']==21)
-        self.assertEqual(item['title'],'Chybějící title na hlavní stránce')
+        self.assertEqual(item['title'],'Upravit SEO metadata – Chybějící title na hlavní stránce')
         self.assertEqual(item['started_at'],'2026-11-14T14:10:00')
         self.assertIsNone(item['finished_at'])
         self.assertEqual(item['stage'],'Právě probíhá')

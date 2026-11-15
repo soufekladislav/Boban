@@ -147,8 +147,9 @@ def _retry_delay(attempt):
 def _schedule_retry(job, error, action_status="queued"):
     attempt = int(_row_get(job, "attempts", 0) or 0) + 1
     max_attempts = int(_row_get(job, "max_attempts", 3) or 3)
+    permanent = isinstance(error, wb.FreshCorePermanentError)
     conn = wb.db()
-    if attempt >= max_attempts:
+    if attempt >= max_attempts or permanent:
         conn.execute(
             "UPDATE jobs SET status='failed',attempts=?,result_json=?,finished_at=?,locked_at=NULL,updated_at=? WHERE id=?",
             (attempt, json.dumps({"error": str(error)}, ensure_ascii=False), wb.now(), wb.now(), job["id"])
@@ -161,7 +162,9 @@ def _schedule_retry(job, error, action_status="queued"):
         conn.commit(); conn.close()
         wb.create_notification(
             job["project_id"], "Potřebuji tvoji pozornost",
-            f"Úkol #{_row_get(job, 'action_id', '?')} se nepodařilo dokončit ani po {attempt} pokusech. Otevři úkol a podíváme se na důvod.",
+            (f"Úkol #{_row_get(job, 'action_id', '?')} nelze bezpečně provést: {str(error)[:250]}. "
+             if permanent else
+             f"Úkol #{_row_get(job, 'action_id', '?')} se nepodařilo dokončit ani po {attempt} pokusech. Otevři úkol a podíváme se na důvod."),
             url=f"/projects/{job['project_id']}/actions?view=todo", level="error", kind="job_error", user_id=_row_get(job, "user_id")
         )
         return "failed"
