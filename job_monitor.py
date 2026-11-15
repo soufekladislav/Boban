@@ -43,6 +43,22 @@ def title_for(row, issue_titles=None):
     """Name the actual work, not 'job #123'; never invent a site or issue title."""
     typ = str(row.get("job_type") or "")
     issue = clean_text(row.get("issue_title"), 125)
+    action_type = str(row.get("action_type") or "")
+    proposed = _parse(row.get("proposed_json"))
+    if action_type in {"update_meta", "update_seo_metadata", "update_image_alt"}:
+        fields = []
+        for key,label in (("title","SEO title"),("description","meta description"),
+                          ("canonical","canonical"),("noindex","noindex"),
+                          ("nofollow","nofollow"),("alt","ALT obrázku")):
+            if key in proposed: fields.append(label)
+        what = " a ".join(fields[:2]) + (" a další" if len(fields)>2 else "") if fields else "SEO metadata"
+        target = clean_text(proposed.get("title") or proposed.get("alt"), 90)
+        if not target and row.get("target_url"):
+            from urllib.parse import urlparse,unquote
+            path = unquote(urlparse(row["target_url"]).path).strip("/").split("/")[-1]
+            target = clean_text(path.replace("-"," "),90)
+        if not target: target = issue
+        return clean_text(("Upravit " + what + (" – " + target if target else "")), 160)
     if issue:
         return issue
     parsed = _parse(row.get("payload_json"))
