@@ -71,7 +71,8 @@ class PinterestApprovedSnapshotTests(unittest.TestCase):
         self.assertEqual(report['exported'],1)
         self.assertEqual(report['source'],'last_approved_google_snapshot')
         self.assertIn(b'in stock',output)
-        self.assertIn('Outdoor & sport',output.decode('utf-8'))
+        from xml.etree import ElementTree as ET
+        self.assertEqual(ET.fromstring(output).findtext('channel/item/description'),'Outdoor & sport')
         self.assertFalse(report['ingested_by_pinterest'])
 
     def test_empty_or_invalid_feed_is_rejected(self):
