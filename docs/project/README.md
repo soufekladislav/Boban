@@ -11,9 +11,10 @@
 3. [03 — Inventura skutečného stavu](03-STATE-INVENTORY.md): co je v main, co v PR, co není produkčně potvrzeno a co je rizikové.
 4. [04 — Roadmap a pravidla řízení](04-ROADMAP-GOVERNANCE.md): P0/P1/P2, standard Issues, Definition of Done, práce s GitHub Project #11.
 5. [05 — Issue register a Project #11](05-ISSUES-BOARD.md): konkrétní pracovní backlog, závislosti a evidence všech PR #1–#7.
-6. [Původní architektura](../../architecture.md), [integrace](../../integrations.md), [roadmap 0.7–0.8](../../roadmap-0.7x-0.8.md): historické zdroje; technické detaily je nutné ověřovat v aktuální větvi.
-7. [Dokumentace sjednoceného release (PR #7)](https://github.com/soufekladislav/Boban/blob/release/boban-unified-20261116/docs/UNIFIED-DEPLOY-2026-11-16.md): konkrétní dosavadní chyby, verze, deploy.
-8. [PR #1 — Goal First](https://github.com/soufekladislav/Boban/pull/1): samostatná obchodní logika, není součástí PR #7.
+6. [06 — Inventura existujících funkcí](06-EXISTING-CAPABILITIES.md): 15 realizovaných oblastí s odkazy na nové Issues #24–#38 a testovací kritéria.
+7. [Původní architektura](../../architecture.md), [integrace](../../integrations.md), [roadmap 0.7–0.8](../../roadmap-0.7x-0.8.md): historické zdroje; technické detaily je nutné ověřovat v aktuální větvi.
+8. [Dokumentace sjednoceného release (PR #7)](https://github.com/soufekladislav/Boban/blob/release/boban-unified-20261116/docs/UNIFIED-DEPLOY-2026-11-16.md): konkrétní dosavadní chyby, verze, deploy.
+9. [PR #1 — Goal First](https://github.com/soufekladislav/Boban/pull/1): samostatná obchodní logika, není součástí PR #7.
 
 ## Závazný slovník stavu
 
