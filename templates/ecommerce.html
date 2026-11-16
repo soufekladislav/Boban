@@ -252,7 +252,8 @@
     {% endif %}
     <form method="post" action="{{ url_for('ecommerce_pinterest_build',project_id=project.id) }}">
       <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
-      <button class="btn primary" {{ 'disabled' if not workflow.approved }}>{{ 'Znovu připravit Pinterest XML' if pinterest_config.generated_at else 'Připravit Pinterest XML' }}</button>
+      <button class="btn primary" {{ 'disabled' if not pinterest_can_build }}>{{ 'Znovu připravit Pinterest XML' if pinterest_config.generated_at else 'Připravit Pinterest XML' }}</button>
+      <p class="{{ 'muted' if pinterest_can_build else 'commerce-warning' }}" role="status">{{ pinterest_gate_reason }}</p>
     </form>
     <p class="muted">Po prvním vytvoření se XML obnovuje automaticky společně s katalogem; Pinterest z této URL načítá ceny a dostupnost podle svého harmonogramu.</p>
     <div class="commerce-controls">
