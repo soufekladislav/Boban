@@ -229,6 +229,56 @@
     <p class="muted">Odeslání přes API zahájí načtení stávajícího souboru; schválení produktů kontroluj podle skutečné odpovědi Meta a v Commerce Manageru. Žádná nová reklama se nevytváří.</p>
   </section>
 </div>
+<div class="commerce-step-heading" id="pinterest-platform">
+  <span class="eyebrow">KROK 3 · PINTEREST</span><h2>Pinterest – produktový katalog</h2>
+  <p class="muted">Využívá tentýž schválený sortiment jako ostatní platformy, nikoli další import produktů.</p>
+</div>
+<div class="commerce-platform-grid">
+  <section class="card commerce-panel" aria-label="Pinterest – příprava feedu">
+    <div class="commerce-heading"><div><span class="eyebrow">PINTEREST · XML</span><h2>Publikace a synchronizace</h2></div>
+      <span class="badge {{ 'connected' if pinterest_config.generated_at else 'warning' }}">{{ 'XML připraveno' if pinterest_config.generated_at else 'Zatím nepublikováno' }}</span>
+    </div>
+    {% if pinterest_config.generated_at %}
+      <div class="commerce-export-result">
+        <small>Poslední publikace: {{ pinterest_config.generated_at }}</small>
+        <div class="commerce-stats"><div><small>Platné nabídky</small><strong>{{ pinterest_config.exported_count }}</strong></div>
+        <div><small>Vynecháno</small><strong>{{ pinterest_config.report.omitted if pinterest_config.report else '—' }}</strong></div></div>
+        <label>Veřejná URL RSS XML
+          <input readonly onclick="this.select()" value="{{ url_for('catalog_pinterest_public',token=pinterest_config.feed_token,_external=True) }}">
+        </label>
+      </div>
+    {% else %}
+      <p class="muted">Schval společný katalog, dokonči synchronizaci produktů a variant a pak připrav první Pinterest XML.</p>
+    {% endif %}
+    <form method="post" action="{{ url_for('ecommerce_pinterest_build',project_id=project.id) }}">
+      <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <button class="btn primary" {{ 'disabled' if not workflow.approved }}>{{ 'Znovu připravit Pinterest XML' if pinterest_config.generated_at else 'Připravit Pinterest XML' }}</button>
+    </form>
+    <p class="muted">Po prvním vytvoření se XML obnovuje automaticky společně s katalogem; Pinterest z této URL načítá ceny a dostupnost podle svého harmonogramu.</p>
+    <div class="commerce-controls">
+      <a class="btn" href="{{ url_for('connectors',project_id=project.id) }}#pinterest-connector">Nastavení Pinterestu</a>
+      <a class="btn" href="https://www.pinterest.com/business/hub/" rel="noopener noreferrer" target="_blank">Pinterest Business</a>
+    </div>
+  </section>
+  <section class="card commerce-panel" aria-label="Pinterest – stav katalogu">
+    <div class="commerce-heading"><div><span class="eyebrow">PINTEREST · VÝSLEDKY</span><h2>Stav a kontrola</h2></div>
+      <span class="badge">{{ 'Registrace nahlášena' if pinterest_config.registered else 'Bez potvrzené registrace' }}</span>
+    </div>
+    {% if pinterest_config.last_error %}<p class="commerce-warning">Poslední chyba obnovení XML: {{ pinterest_config.last_error }}</p>{% endif %}
+    {% if pinterest_config.generated_at %}
+      <div class="commerce-platform-meta"><span>Vygenerováno</span><strong>{{ pinterest_config.generated_at }}</strong></div>
+      <div class="commerce-platform-meta"><span>Produkty ve zdroji</span><strong>{{ pinterest_config.exported_count }}</strong></div>
+      {% if pinterest_config.report and pinterest_config.report.errors %}
+        <details class="commerce-details"><summary>Vyřazené produkty (prvních 15)</summary>
+          {% for issue in pinterest_config.report.errors[:15] %}
+            <p>{{ issue.id }}: {{ issue.problems|join(', ') }}</p>
+          {% endfor %}
+        </details>
+      {% endif %}
+    {% endif %}
+    <p class="muted">Počet platných produktů na Pinterestu a chyby zpracování zatím musíš ověřit v Pinterest Business. Připravené XML ani zaškrtnuté potvrzení neznamená schválení katalogu.</p>
+  </section>
+</div>
 <script>
 (function(){
   const root=document.querySelector('#merchant-platform');
@@ -248,5 +298,5 @@
   });
 })();
 </script>
-<section class="card commerce-next"><span class="eyebrow">DALŠÍ ADAPTÉRY / BUDOUCÍ VIKI</span><h2>Další rozšiřování katalogů</h2><p>Google, Heureka, Zboží.cz i Meta používají společný schválený katalog. Po ověření výstupů se celý modul později přesune do Viki.</p></section>
+<section class="card commerce-next"><span class="eyebrow">DALŠÍ ADAPTÉRY / BUDOUCÍ VIKI</span><h2>Další rozšiřování katalogů</h2><p>Google, Heureka, Zboží.cz, Meta i Pinterest používají společný schválený katalog. Po ověření výstupů se celý modul později přesune do Viki.</p></section>
 {% endblock %}

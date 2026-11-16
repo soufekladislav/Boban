@@ -28,6 +28,7 @@ import merchant_export
 import heureka_export
 import zbozi_export
 import meta_export
+import pinterest_catalog
 import meta_graph
 import zbozi_categories
 import zbozi_fenix
@@ -1466,6 +1467,27 @@ try:
             _conn_catalog.execute('ALTER TABLE project_meta_feeds ADD COLUMN '+_meta_field+' '+_meta_type+' NULL')
 except Exception as _meta_error:
     raise RuntimeError('Nelze rozšířit stav Meta Graph API: '+str(_meta_error))
+
+# Pinterest feed: same approved catalog, distinct random URL and self-reported Business registration.
+# The registered flag is NOT live API confirmation, and no Pinterest credentials are stored.
+if DB_BACKEND == 'mysql':
+    _conn_catalog.execute("""CREATE TABLE IF NOT EXISTS project_pinterest_feeds (
+      project_id BIGINT UNSIGNED PRIMARY KEY,
+      feed_token VARCHAR(100) NOT NULL UNIQUE,
+      generated_at VARCHAR(32) NULL,
+      exported_count INT NOT NULL DEFAULT 0,
+      report_json LONGTEXT NULL,
+      registered TINYINT NOT NULL DEFAULT 0,
+      registered_at VARCHAR(32) NULL,
+      last_error TEXT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
+else:
+    _conn_catalog.execute("""CREATE TABLE IF NOT EXISTS project_pinterest_feeds (
+      project_id INTEGER PRIMARY KEY, feed_token TEXT NOT NULL UNIQUE,
+      generated_at TEXT, exported_count INTEGER NOT NULL DEFAULT 0,
+      report_json TEXT, registered INTEGER NOT NULL DEFAULT 0,
+      registered_at TEXT, last_error TEXT
+    )""")
 # Zbozi shipping rules: optional user-confirmed delivery for ALL exported items.
 # Never invent carrier, price, COD or per-item availability.
 try:
@@ -8022,6 +8044,7 @@ def connectors(project_id):
     merchant_config = integration_config(integration_map.get("merchant_center"))
     heureka_config = heureka_settings(project_id)
     zbozi_api_config = integration_config(integration_map.get("zbozi_fenix"))
+    pinterest_config = pinterest_settings(project_id)
     meta_config = meta_settings(project_id)
     meta_config["api_token_cipher"] = None if not meta_config.get("api_token_cipher") else "configured"
     if 'merchant_csrf_token' not in session:
@@ -8035,7 +8058,7 @@ def connectors(project_id):
     return render_template(
         "connectors.html",
         project=p, integrations=integrations, integration_map=integration_map,
-        gsc_config=gsc_config, ga4_config=ga4_config, gtm_config=gtm_config, merchant_config=merchant_config, heureka_config=heureka_config, zbozi_api_config=zbozi_api_config, meta_config=meta_config, merchant_csrf=session['merchant_csrf_token'], gsc_sitemaps=sitemaps,
+        gsc_config=gsc_config, ga4_config=ga4_config, gtm_config=gtm_config, merchant_config=merchant_config, heureka_config=heureka_config, zbozi_api_config=zbozi_api_config, pinterest_config=pinterest_config, meta_config=meta_config, merchant_csrf=session['merchant_csrf_token'], gsc_sitemaps=sitemaps,
         performance=latest_source_snapshot(project_id, "pagespeed_crux"), gtm=latest_source_snapshot(project_id, "gtm"),
         connector_catalog=CONNECTOR_CATALOG, google_oauth_ready=google_oauth_ready(), pagespeed_ready=pagespeed_ready(), commerce_read=core_catalog_summary(project_id),
     )
@@ -8644,6 +8667,129 @@ def catalog_meta_public(token):
     return response
 
 
+
+def pinterest_settings(project_id):
+    conn=db()
+    try:
+        row=conn.execute('SELECT * FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
+        return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def catalog_publish_pinterest(project_id):
+    """One approved selection, Pinterest-specific RSS, atomic file, separate output."""
+    if not catalog_ready(project_id):
+        raise ValueError('Nejdříve dokonči načtení produktů i variant.')
+    conn=db()
+    try:
+        project=conn.execute('SELECT * FROM projects WHERE id=?',(project_id,)).fetchone()
+        state=feed_workflow.state(conn,project_id)
+        if not project:raise ValueError('Projekt neexistuje.')
+        if not state.get('approved'):raise ValueError('Nejdříve schval společný sortiment.')
+        rec=conn.execute('SELECT feed_token FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
+        token=rec['feed_token'] if rec else secrets.token_urlsafe(32)
+    finally:
+        conn.close()
+    parents,variants,excluded,_=catalog_cached_data(project_id)
+    if len(parents)+len(variants)>CATALOG_MAX_EXPORT_ROWS:
+        raise ValueError('Katalog překročil bezpečný limit exportu.')
+    categories=(refresh_catalog_categories(project_id,project['site_url'])
+                if excluded['category'] else (cached_catalog_categories(project_id)
+                or feed_workflow.category_tree(parents)))
+    chosen_p,chosen_v,summary=feed_workflow.selected(parents,variants,excluded,categories=categories)
+    forbidden=feed_workflow.excluded_category_ids(categories,excluded['category'])
+    if any(feed_workflow.product_category_ids(p)&forbidden for p in chosen_p):
+        raise ValueError('Export obsahuje vyloučenou kategorii.')
+    xml,report=pinterest_catalog.build_pinterest_feed(project['name'],chosen_p,chosen_v,project['site_url'])
+    report['selection']=summary
+    if not report.get('exported'):
+        raise ValueError('Pinterest XML nemá žádnou platnou nabídku.')
+    CATALOG_FEED_DIR.mkdir(parents=True,exist_ok=True)
+    target=CATALOG_FEED_DIR/('pinterest_'+str(project_id)+'_'+token+'.xml')
+    temp=target.with_name(target.name+'.'+secrets.token_hex(8)+'.tmp')
+    try:
+        with temp.open('wb') as output:
+            output.write(xml);output.flush();os.fsync(output.fileno())
+        temp.replace(target)
+    finally:
+        temp.unlink(missing_ok=True)
+    conn=db()
+    try:
+        values=(project_id,token,now(),int(report['exported']),json.dumps(report,ensure_ascii=False))
+        if DB_BACKEND=='mysql':
+            conn.execute("""INSERT INTO project_pinterest_feeds
+                 (project_id,feed_token,generated_at,exported_count,report_json)
+                 VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE
+                 generated_at=VALUES(generated_at),exported_count=VALUES(exported_count),
+                 report_json=VALUES(report_json),last_error=NULL""",values)
+        else:
+            conn.execute("""INSERT INTO project_pinterest_feeds
+                 (project_id,feed_token,generated_at,exported_count,report_json)
+                 VALUES(?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET
+                 generated_at=excluded.generated_at,exported_count=excluded.exported_count,
+                 report_json=excluded.report_json,last_error=NULL""",values)
+        conn.commit()
+    finally:
+        conn.close()
+    return report
+
+
+@app.route('/catalog/pinterest/<token>.xml',methods=['GET'])
+def catalog_pinterest_public(token):
+    if len(token)<32 or len(token)>100 or not re.fullmatch(r'[A-Za-z0-9_-]+',token):
+        abort(404)
+    conn=db()
+    try:
+        rec=conn.execute('SELECT project_id FROM project_pinterest_feeds WHERE feed_token=?',(token,)).fetchone()
+    finally:
+        conn.close()
+    if not rec:abort(404)
+    path=CATALOG_FEED_DIR/('pinterest_'+str(rec['project_id'])+'_'+token+'.xml')
+    if not path.is_file():abort(404)
+    from flask import send_file
+    response=send_file(path,mimetype='application/xml',conditional=True,max_age=300)
+    response.headers['Cache-Control']='public, max-age=300'
+    return response
+
+
+@app.route('/projects/<int:project_id>/ecommerce/pinterest/build',methods=['POST'])
+@login_required
+def ecommerce_pinterest_build(project_id):
+    project_for_user(project_id)
+    if not current_user.can_edit:abort(403)
+    merchant_check_csrf()
+    try:
+        with commerce_sync_guard(project_id):
+            result=catalog_publish_pinterest(project_id)
+        flash('Pinterest XML připraveno: '+str(result['exported'])+' produktů. Přidej veřejnou URL do Pinterest Business.','success')
+    except Exception as exc:
+        flash('Pinterest export: '+str(exc)[:210],'error')
+    return redirect(url_for('ecommerce',project_id=project_id)+'#pinterest-platform')
+
+
+@app.route('/projects/<int:project_id>/connectors/pinterest',methods=['POST'])
+@login_required
+def pinterest_connector_save(project_id):
+    project_for_user(project_id)
+    if not current_user.can_edit:abort(403)
+    merchant_check_csrf()
+    confirmed=request.form.get('registered')=='1'
+    conn=db()
+    try:
+        row=conn.execute('SELECT generated_at FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
+        if confirmed and not (row and row['generated_at']):
+            flash('Nejdříve zveřejni Pinterest XML v E-commerce.', 'warning')
+            return redirect(url_for('connectors',project_id=project_id)+'#pinterest-connector')
+        conn.execute('UPDATE project_pinterest_feeds SET registered=?,registered_at=? WHERE project_id=?',
+                     (1 if confirmed else 0,now() if confirmed else None,project_id))
+        conn.commit()
+    finally:
+        conn.close()
+    flash('Uložil jsem tvoje potvrzení. Načtení a schválení Pinterestem zatím není ověřené.','info')
+    return redirect(url_for('connectors',project_id=project_id)+'#pinterest-connector')
+
+
 @app.route('/projects/<int:project_id>/ecommerce/meta/build',methods=['POST'])
 @login_required
 def ecommerce_meta_build(project_id):
@@ -9155,6 +9301,15 @@ def catalog_workflow_tick(project_id):
                             conn_err.execute('UPDATE project_meta_feeds SET last_error=? WHERE project_id=?',(str(meta_exc)[:240],project_id))
                             conn_err.commit()
                         finally:conn_err.close()
+                if pinterest_settings(project_id).get('generated_at'):
+                    try:catalog_publish_pinterest(project_id)
+                    except Exception as pinterest_exc:
+                        conn_err=db()
+                        try:
+                            conn_err.execute('UPDATE project_pinterest_feeds SET last_error=? WHERE project_id=?',
+                                             (str(pinterest_exc)[:240],project_id))
+                            conn_err.commit()
+                        finally:conn_err.close()
                 feed_workflow.update(db_conn:=db(),DB_BACKEND,project_id,now(),mode='active',last_error=None)
                 db_conn.close()
                 return 'publikováno '+str(report['exported'])
@@ -9310,6 +9465,10 @@ def ecommerce(project_id):
         zbozi_config['shipping_rules']=json.loads(zbozi_config.get('shipping_rules_json') or '[]')
     except (TypeError,ValueError):zbozi_config['shipping_rules']=[]
     zbozi_api_config=integration_config(integration_row(project_id,"zbozi_fenix"))
+    pinterest_config=pinterest_settings(project_id)
+    if pinterest_config.get('report_json'):
+        try:pinterest_config['report']=json.loads(pinterest_config['report_json'])
+        except (ValueError,TypeError):pinterest_config['report']={}
     meta_config=meta_settings(project_id)
     meta_config["api_token_cipher"] = None if not meta_config.get("api_token_cipher") else "configured"
     try:
@@ -9322,7 +9481,7 @@ def ecommerce(project_id):
     if heureka_config.get('report_json'):
         try:heureka_config['report']=json.loads(heureka_config['report_json'])
         except (ValueError,TypeError):heureka_config['report']={}
-    return render_template('ecommerce.html',merchant_connected=bool(merchant_row and merchant_row['status'] != 'disconnected'),merchant_csrf=session['merchant_csrf_token'],merchant_snapshot=merchant_snapshot,heureka_config=heureka_config,zbozi_config=zbozi_config,zbozi_api_config=zbozi_api_config,meta_config=meta_config,project=project,ecommerce=info,export_report=json.loads(info['feed']['report_json']) if info['feed'] and info['feed'].get('report_json') else {},workflow=workflow,category_rows=cats,excluded_categories=excluded['category'],inherited_excluded_categories=inherited_excluded,excluded_products=excluded['product'],product_rows=rows,product_page=page,product_pages=max(1,(len(filtered)+34)//35),product_query=q,selection_preview=preview,product_visible_total=len(filtered),category_visible_total=len(listing))
+    return render_template('ecommerce.html',merchant_connected=bool(merchant_row and merchant_row['status'] != 'disconnected'),merchant_csrf=session['merchant_csrf_token'],merchant_snapshot=merchant_snapshot,heureka_config=heureka_config,zbozi_config=zbozi_config,zbozi_api_config=zbozi_api_config,pinterest_config=pinterest_config,meta_config=meta_config,project=project,ecommerce=info,export_report=json.loads(info['feed']['report_json']) if info['feed'] and info['feed'].get('report_json') else {},workflow=workflow,category_rows=cats,excluded_categories=excluded['category'],inherited_excluded_categories=inherited_excluded,excluded_products=excluded['product'],product_rows=rows,product_page=page,product_pages=max(1,(len(filtered)+34)//35),product_query=q,selection_preview=preview,product_visible_total=len(filtered),category_visible_total=len(listing))
 
 
 @app.route('/projects/<int:project_id>/ecommerce/sync-variants',methods=['POST'])
