@@ -198,6 +198,33 @@
   <div class="commerce-controls"><a class="btn" href="https://sluzby.heureka.cz/" rel="noopener noreferrer" target="_blank">Administrace Heureky</a><a class="btn" href="{{ url_for('ecommerce',project_id=project.id) }}#heureka-platform">Feedy a stav v E-commerce</a></div>
   <p class="muted">Bez ověření skladových počtů a expedice Boban dostupnost neoznačí jako připravenou. Heureka nemá univerzální OAuth konektor jako Google.</p>
 </section>
+<section class="card connector-card" id="pinterest-connector">
+  <div class="connector-top"><div class="connector-icon google">P</div>
+    <div><span class="eyebrow">E-COMMERCE · KATALOGOVÝ KONEKTOR</span><h3>Pinterest Business</h3></div>
+    <span class="badge {{ 'connected' if pinterest_config.registered else 'warning' }}">{{ 'Registrace potvrzena uživatelem' if pinterest_config.registered else ('XML připraveno' if pinterest_config.generated_at else 'Čeká na XML') }}</span>
+  </div>
+  <p>Pro rychlé spuštění využíváme existující schválený katalog. Pinterest si XML z veřejné URL pravidelně načítá; nevyžadujeme nový import WooCommerce ani oprávnění k reklamám.</p>
+  {% if pinterest_config.generated_at %}
+    <label>Veřejná URL pro Pinterest XML
+      <input readonly onclick="this.select()" value="{{ url_for('catalog_pinterest_public',token=pinterest_config.feed_token,_external=True) }}">
+    </label>
+    <div class="connector-trust ok"><b>Zdroj dat připraven</b>
+      <span>{{ pinterest_config.exported_count }} položek · aktualizace {{ pinterest_config.generated_at }}</span>
+    </div>
+    <form class="form compact-form" method="post" action="{{ url_for('pinterest_connector_save',project_id=project.id) }}">
+      <input type="hidden" name="merchant_csrf_token" value="{{ merchant_csrf }}">
+      <label><input type="checkbox" name="registered" value="1" {{ 'checked' if pinterest_config.registered }}> URL jsem vložil do Pinterest Business a nastavil pravidelné načítání</label>
+      <button class="btn" type="submit">Uložit stav registrace</button>
+    </form>
+  {% else %}
+    <p class="muted">Nejdříve v E-commerce schval produktový výběr a vytvoř Pinterest XML.</p>
+  {% endif %}
+  <p class="muted">Potřebuješ firemní účet, ověřenou doménu a způsobilý obchod. Potvrzení zde je pouze tvoje evidence, <strong>nikoli ověřené přijetí katalogu Pinterestem</strong>. Země CZ, jazyk čeština, ceny se přebírají z katalogu.</p>
+  <div class="commerce-controls">
+    <a class="btn" href="{{ url_for('ecommerce',project_id=project.id) }}#pinterest-platform">Katalog v E-commerce</a>
+    <a class="btn" href="https://www.pinterest.com/business/hub/" rel="noopener noreferrer" target="_blank">Pinterest Business</a>
+  </div>
+</section>
 <section class="card connector-card" id="meta-connector">
   <div class="connector-top"><div class="connector-icon google">M</div><div><span class="eyebrow">E-COMMERCE · PŘIPOJENÍ</span><h3>Facebook / Meta</h3></div><span class="badge {{ 'connected' if meta_config.api_token_cipher else 'warning' }}">{{ 'AUTORIZOVÁNO' if meta_config.api_token_cipher else 'NEPŘIPOJENO' }}</span></div>
   <p>Jedno připojení Meta Graph API pro katalog. Vyber existující katalog Adrenaline Race. Publikaci a kontrolu importu řeší E-commerce; reklamy se nespouštějí.</p>
