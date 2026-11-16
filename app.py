@@ -8028,6 +8028,42 @@ def operator_run(project_id):
     return redirect(url_for("project", project_id=project_id) + "#boban-chat")
 
 
+@app.route('/admin/deployment/status', methods=['GET'])
+@login_required
+@admin_required
+def admin_deployment_status():
+    """Read-only code fingerprints, independent of the admin template."""
+    names = (
+        'app.py', 'manage.py', 'pinterest_catalog.py',
+        'templates/partials/job_ledger.html', 'templates/ecommerce.html',
+        'templates/connectors.html', 'scripts/run_boban_cron.sh',
+        'scripts/install_seo_worker_cron.sh', '.gitattributes'
+    )
+    fingerprints = {}
+    shell_health = {}
+    for name in names:
+        source = BASE_DIR / name
+        raw = source.read_bytes() if source.is_file() else None
+        if raw is None:
+            fingerprints[name] = None
+            continue
+        normalized = raw.replace(b'\r\n', b'\n')
+        fingerprints[name] = hashlib.sha1(
+            b'blob ' + str(len(normalized)).encode('ascii') + b'\x00' + normalized
+        ).hexdigest()
+        if name.endswith('.sh'):
+            shell_health[name] = 'LF' if b'\r\n' not in raw else 'CRLF – cron may fail'
+    response = jsonify({
+        'release': 'bob-unified-2026-11-16',
+        'app_version': APP_VERSION,
+        'files': fingerprints,
+        'shell_scripts': shell_health,
+        'note': 'Souborové otisky nedokládají funkčnost serverového cronu.'
+    })
+    response.headers['Cache-Control'] = 'no-store, private'
+    return response
+
+
 @app.route("/projects/<int:project_id>/connectors")
 @login_required
 def connectors(project_id):
@@ -9492,6 +9528,23 @@ def ecommerce(project_id):
     except (TypeError,ValueError):zbozi_config['shipping_rules']=[]
     zbozi_api_config=integration_config(integration_row(project_id,"zbozi_fenix"))
     pinterest_config=pinterest_settings(project_id)
+    pinterest_complete=bool(
+        info['catalog'].get('next_page')==0 and info['catalog'].get('finished_at')
+        and info['variants_state'] and info['variants_state'].get('next_page')==0
+        and info['variants_state'].get('finished_at')
+    )
+    google_snapshot_current=bool(
+        info['feed'] and info['feed'].get('generated_at')
+        and int(workflow.get('published_revision') or 0)==int(workflow.get('revision') or 0)
+    )
+    pinterest_can_build=bool(workflow.get('approved')
+                             and (pinterest_complete or google_snapshot_current))
+    pinterest_gate_reason=(
+        'Nejdříve schval výběr sortimentu v katalogu.' if not workflow.get('approved') else
+        'Produkty a varianty se stále načítají. Nemáme Google XML stejné schválené revize.' if not pinterest_can_build else
+        'Použiji poslední schválené publikované Google XML.' if not pinterest_complete else
+        'Použiji kompletní aktuální schválený katalog.'
+    )
     if pinterest_config.get('report_json'):
         try:pinterest_config['report']=json.loads(pinterest_config['report_json'])
         except (ValueError,TypeError):pinterest_config['report']={}
@@ -9507,7 +9560,7 @@ def ecommerce(project_id):
     if heureka_config.get('report_json'):
         try:heureka_config['report']=json.loads(heureka_config['report_json'])
         except (ValueError,TypeError):heureka_config['report']={}
-    return render_template('ecommerce.html',merchant_connected=bool(merchant_row and merchant_row['status'] != 'disconnected'),merchant_csrf=session['merchant_csrf_token'],merchant_snapshot=merchant_snapshot,heureka_config=heureka_config,zbozi_config=zbozi_config,zbozi_api_config=zbozi_api_config,pinterest_config=pinterest_config,meta_config=meta_config,project=project,ecommerce=info,export_report=json.loads(info['feed']['report_json']) if info['feed'] and info['feed'].get('report_json') else {},workflow=workflow,category_rows=cats,excluded_categories=excluded['category'],inherited_excluded_categories=inherited_excluded,excluded_products=excluded['product'],product_rows=rows,product_page=page,product_pages=max(1,(len(filtered)+34)//35),product_query=q,selection_preview=preview,product_visible_total=len(filtered),category_visible_total=len(listing))
+    return render_template('ecommerce.html',merchant_connected=bool(merchant_row and merchant_row['status'] != 'disconnected'),merchant_csrf=session['merchant_csrf_token'],merchant_snapshot=merchant_snapshot,heureka_config=heureka_config,zbozi_config=zbozi_config,zbozi_api_config=zbozi_api_config,pinterest_config=pinterest_config,pinterest_can_build=pinterest_can_build,pinterest_gate_reason=pinterest_gate_reason,meta_config=meta_config,project=project,ecommerce=info,export_report=json.loads(info['feed']['report_json']) if info['feed'] and info['feed'].get('report_json') else {},workflow=workflow,category_rows=cats,excluded_categories=excluded['category'],inherited_excluded_categories=inherited_excluded,excluded_products=excluded['product'],product_rows=rows,product_page=page,product_pages=max(1,(len(filtered)+34)//35),product_query=q,selection_preview=preview,product_visible_total=len(filtered),category_visible_total=len(listing))
 
 
 @app.route('/projects/<int:project_id>/ecommerce/sync-variants',methods=['POST'])
