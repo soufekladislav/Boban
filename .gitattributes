@@ -1,2 +1,6 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# cPanel/Passenger executes shell scripts on Linux. GitHub Desktop Windows
+# may use core.autocrlf=true, but these files MUST be checked out with LF.
+*.sh text eol=lf

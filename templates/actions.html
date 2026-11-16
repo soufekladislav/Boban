@@ -5,22 +5,15 @@
   <div><a class="back" href="{{ url_for('project', project_id=project.id) }}">← {{ project.name }}</a><h1>Úkoly</h1><p class="lead-sm">Boban připraví řešení. Ty ho můžeš před publikací libovolně upravit. Teprve potom změnu pošlu přes správný konektor (Fresh Core, Search Console nebo GA4) a ověřím výsledek.</p></div>
 </div>
 
+{% include 'partials/boban_work.html' %}
+{% include 'partials/job_ledger.html' %}
+
 <div class="tab-row">
   <a class="tab {{ 'active' if view=='todo' }}" href="{{ url_for('actions', project_id=project.id, view='todo') }}">K řešení <b>{{ counts.todo_count or 0 }}</b></a>
   <a class="tab {{ 'active' if view=='done' }}" href="{{ url_for('actions', project_id=project.id, view='done') }}">Dokončené <b>{{ counts.done_count or 0 }}</b></a>
   <a class="tab {{ 'active' if view=='hidden' }}" href="{{ url_for('actions', project_id=project.id, view='hidden') }}">Odložené / skryté <b>{{ counts.hidden_count or 0 }}</b></a>
   <a class="tab {{ 'active' if view=='all' }}" href="{{ url_for('actions', project_id=project.id, view='all') }}">Vše <b>{{ counts.total_count or 0 }}</b></a>
 </div>
-
-{% if view=='todo' and queue.total and not worker.healthy %}
-<div class="info-block wide-info" role="status"><div><b>SEO worker není potvrzen jako aktivní</b><span>
-{{ queue.total }} úloh čeká nebo se zpracovává, ale poslední odezva SEO workeru chybí nebo je stará.
-Prověř naplánování <code>manage.py work-queue</code> a jeho log. Úkoly bez schválení se nepublikují.
-</span></div></div>
-{% endif %}
-{% if view=='todo' and queue.batch_total %}
-<div class="queue-status queue-progress-card" data-queue-card data-project-id="{{ project.id }}"><div class="queue-progress-copy"><span class="live-dot"></span><strong data-queue-label>{{ ('Úlohy čekají – worker nepracuje' if not worker.healthy else 'Úlohy čekají / probíhají') if queue.total else ('Některé úkoly skončily chybou' if queue.failed else 'Poslední dávka dokončena') }}</strong><p>Dokončeno <b data-queue-done>{{ queue.batch_done }}</b> z <b data-queue-total>{{ queue.batch_total }}</b> skupin úkolů. <span data-queue-errors>{% if queue.failed %}Chyb: {{ queue.failed }}.{% endif %}</span> Změny vyžadující schválení se nepublikují samy.</p><div class="progress-track" role="progressbar" aria-label="Průběh úkolů" aria-valuenow="{{ queue.percent }}" aria-valuemin="0" aria-valuemax="100" data-queue-progress><div style="width:{{ queue.percent }}%" data-queue-fill></div></div><small data-queue-pct>{{ queue.percent }} %</small></div></div>
-{% endif %}
 
 <div class="info-block wide-info"><div><b>Workflow</b><span>Analýza → Bobanův návrh → tvoje úprava → publikace → ověření cílovou službou + měření dopadu → měření dopadu. AI návrh není automaticky finální text.</span></div></div>
 
@@ -33,11 +26,23 @@ Prověř naplánování <code>manage.py work-queue</code> a jeho log. Úkoly bez
 
   <div class="task-list clean-task-list">
     {% for a in actions %}
-    <article class="task-card-clean task-card-v7 compact-task">
+    <article class="task-card-clean task-card-v7 compact-task" id="action-{{ a.id }}">
       <div class="task-check">{% if view in ['todo','hidden'] and a.status in ['draft','failed','approved','snoozed','dismissed'] %}<input class="js-row-check" form="actions-form" type="checkbox" name="action_ids" value="{{ a.id }}">{% endif %}</div>
       <div class="task-content-clean">
-        <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>Úkol #{{ a.id }}</strong> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
+        <div class="task-title-row"><div><span class="badge">{% if a.provider=='search_console' %}Search Console{% elif a.provider=='ga4' %}GA4{% elif a.action_type=='update_image_alt' %}ALT obrázku{% else %}SEO{% endif %}</span> <strong>{{ a.display_title }}</strong> <small class="muted">#{{ a.id }}</small> <span class="badge {{ a.status }}">{{ {'draft':'čeká na kontrolu','approved':'schváleno','queued':'ve frontě','pending':'ověřuji','failed':'chyba','applied':'provedeno','verified':'ověřeno','completed':'vyhodnoceno','snoozed':'odloženo','dismissed':'skryto'}.get(a.status,a.status) }}</span>{% if a.user_edited_at %}<span class="badge user-edit">upraveno uživatelem</span>{% endif %}</div>{% if a.target_url %}<a class="task-url" href="{{ a.target_url }}" target="_blank" rel="noopener">Otevřít stránku ↗</a>{% endif %}</div>
         {% if a.target_url %}<div class="muted small task-url-text">{{ a.target_url }}</div>{% endif %}
+        <div class="muted small task-intent" style="margin:6px 0 8px;line-height:1.55">
+          {% if a.reason %}<div><strong>Proč:</strong> {{ a.reason|truncate(260) }}</div>{% endif %}
+          {% if a.expected_outcome and a.expected_outcome != a.reason %}<div><strong>Očekávaný výsledek:</strong> {{ a.expected_outcome|truncate(250) }}</div>{% endif %}
+          {% if a.status == 'failed' and a.visible_error %}<div role="alert"><strong>Co brání dokončení:</strong> {{ a.visible_error|truncate(270) }}</div>{% endif %}
+        </div>
+        <div class="muted small task-dates">
+          <span>Vytvořeno {{ (a.created_at or '—').replace('T',' ') }}</span>
+          {% if a.approved_at %}<span> · Schváleno {{ a.approved_at.replace('T',' ') }}</span>{% endif %}
+          {% if a.latest_job_started_at %}<span> · Spuštěno {{ a.latest_job_started_at.replace('T',' ') }}</span>{% endif %}
+          {% if a.latest_job_updated_at %}<span> · Poslední aktivita {{ a.latest_job_updated_at.replace('T',' ') }}</span>{% endif %}
+          {% if a.latest_job_finished_at %}<span> · Dokončeno {{ a.latest_job_finished_at.replace('T',' ') }}</span>{% endif %}
+        </div>
 
         <details class="task-expand" {{ 'open' if request.args.get('expand') == a.id|string else '' }}><summary>Detail úkolu · navržená změna, důvod a ověření</summary>
         {% if a.status in ['draft','failed','approved'] and a.proposed %}

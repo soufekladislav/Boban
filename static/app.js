@@ -333,15 +333,142 @@
     list.querySelectorAll('[data-notification-dismiss]').forEach(btn => btn.addEventListener('click', ev => { ev.preventDefault(); ev.stopPropagation(); notificationState(btn.dataset.notificationDismiss,'dismiss'); }));
   }
 
+  function renderJobLedger(monitor) {
+    if (!monitor || !Array.isArray(monitor.items)) return;
+    document.querySelectorAll('[data-job-ledger]').forEach(root => {
+      const text=(selector,value)=>{
+        const el=root.querySelector(selector);
+        if (el) el.textContent=value;
+      };
+      const stamp=value=>String(value||'—').replace('T',' ');
+      const summary=monitor.summary||{};
+      text('[data-job-movement]',(monitor.movement||{}).message||'Průběh zatím nelze ověřit.');
+      text('[data-job-active]','Rozpracováno: '+(summary.active||0));
+      text('[data-job-completed-recent]','Dokončeno za 15 min: '+(summary.completed_15m||0));
+      text('[data-job-last-completed]','Poslední dokončení: '+stamp(summary.last_completed||'neověřeno'));
+      text('[data-job-last-started]','Poslední zahájení: '+stamp(summary.last_started||'neověřeno'));
+      text('[data-job-oldest-waiting]','Nejstarší čekající: '+stamp(summary.oldest_waiting||'žádný'));
+      const target=root.querySelector('[data-job-rows]');
+      if (!target) return;
+      const admin=Boolean(root.dataset.monitorUrl);
+      const signature=JSON.stringify(monitor.items.map(x=>[
+        x.id,x.status,x.created_at,x.started_at,x.updated_at,x.finished_at,x.title
+      ]));
+      if (target.dataset.signature===signature) return;
+      target.dataset.signature=signature;
+      target.replaceChildren();
+      const make=(tag,content)=>{
+        const el=document.createElement(tag);
+        el.textContent=String(content??'');
+        return el;
+      };
+      if (!monitor.items.length) {
+        const row=document.createElement('tr');
+        const td=make('td','Žádné úlohy v tomto výběru.');
+        td.colSpan=admin?7:6;
+        row.append(td);target.append(row);
+      }
+      for (const j of monitor.items) {
+        const row=document.createElement('tr');
+        row.dataset.jobId=j.id;
+        const name=document.createElement('td');
+        name.append(make('strong',j.title||'Nepopsaná úloha'));
+        name.append(make('small',j.purpose||''));
+        name.append(make('small','Evidence #'+j.id+(j.action_id?' · akce #'+j.action_id:'')));
+        if(j.action_url && /^\/projects\/\d+\/actions\?/.test(j.action_url)) {
+          const link=make('a','Detail změny');
+          link.href=j.action_url;
+          name.append(link);
+        }
+        row.append(name);
+        if(admin) row.append(make('td',j.project_name||('Projekt #'+j.project_id)));
+        const state=document.createElement('td');
+        state.append(make('span',j.stage||j.status||'Neznámý stav'));
+        if(j.status==='retry' && j.run_after)
+          state.append(make('small','Další pokus: '+stamp(j.run_after)));
+        row.append(state);
+        for (const field of ['created_at','started_at','updated_at','finished_at'])
+          row.append(make('td',stamp(j[field])));
+        target.append(row);
+      }
+    });
+  }
+
+  async function refreshAdminJobLedger() {
+    const el=document.querySelector('[data-job-ledger][data-monitor-url]');
+    if(!el || document.hidden) return;
+    try {
+      const response=await fetch(el.dataset.monitorUrl,{headers:{'Accept':'application/json'}});
+      if(!response.ok) return;
+      const payload=await response.json();
+      if(payload.ok) renderJobLedger(payload.monitor);
+    } catch (_) {}
+  }
+
   async function fetchNotifications() {
     try {
       const q = new URLSearchParams();
       const queueCard = document.querySelector('[data-queue-card][data-project-id]');
-      if (queueCard) q.set('project_id', queueCard.dataset.projectId);
+      const syncCard = document.querySelector('[data-sync-status-card][data-project-id]');
+      const workCard = document.querySelector('[data-boban-work][data-project-id]');
+      const projectCard = queueCard || syncCard || workCard;
+      if (projectCard) q.set('project_id', projectCard.dataset.projectId);
       const res = await fetch('/api/notifications' + (q.toString() ? '?' + q.toString() : ''), {headers:{'Accept':'application/json'}});
       if (!res.ok) return;
       const data = await res.json();
       renderNotifications(data);
+      if (data.job_history) renderJobLedger(data.job_history);
+      if (data.work) {
+        const work = data.work;
+        document.querySelectorAll('[data-boban-work]').forEach(card => {
+          const setText=(selector,value)=>{
+            const el=card.querySelector(selector);
+            if (el && el.textContent !== value) el.textContent=value;
+          };
+          setText('[data-work-title]',work.title || 'Stav práce není znám');
+          setText('[data-work-why]',work.why || 'Prověřuji rozpracované kroky.');
+          setText('[data-work-progress]',work.progress_label || 'Stav není ověřen');
+          const eta=work.eta;
+          const etaText=eta && work.eta_confidence==='estimated_from_history' ?
+            'Odhad dokončení: za '+eta.min_minutes+'–'+eta.max_minutes+
+            ' min · podle '+eta.samples+' dokončených úloh tohoto typu' :
+            (work.running && !work.eta ?
+               'Čas dokončení zatím nelze spolehlivě určit.' :
+             work.total ? 'Čas dokončení zatím nelze spolehlivě odhadnout.' :
+             work.approvals ? 'Pokračuji automaticky po schválení.' :
+             work.failed_actions ? 'Potřebuji prověřit neúspěšné úkoly.' :
+              'Žádná otevřená úloha.');
+          setText('[data-work-eta]',etaText);
+          const items=card.querySelector('[data-work-list]');
+          if (items) {
+            const signature=JSON.stringify((work.items||[]).map(x=>[x.id,x.status,x.stage,x.retry_at,x.updated_at,x.created_at]));
+            if(items.dataset.signature!==signature) {
+              items.dataset.signature=signature;
+              items.replaceChildren();
+              const rows=work.items||[];
+              if(!rows.length) {
+                const li=document.createElement('li');
+                li.textContent=work.approvals?'Připravené návrhy čekají na schválení.':
+                  work.failed_actions?'Některé úkoly se nezdařily a vyžadují prověření.':
+                  'Aktuálně nemám rozpracované úlohy.';
+                items.append(li);
+              }
+              for(const item of rows) {
+                const li=document.createElement('li');
+                const strong=document.createElement('strong');
+                strong.textContent=item.title;
+                const small=document.createElement('small');
+                const attempt=item.retry_at?' · další pokus '+item.retry_at.replace('T',' '):'';
+                const when=(item.created_at?' · Zařazeno '+String(item.created_at).replace('T',' '):'')+
+                  (item.started_at?' · Spuštěno '+String(item.started_at).replace('T',' '):'')+
+                  (item.updated_at?' · Poslední aktivita '+String(item.updated_at).replace('T',' '):'');
+                small.textContent=item.stage+attempt+' · '+item.why+when;
+                li.append(strong,small);items.append(li);
+              }
+            }
+          }
+        });
+      }
       if (data.queue) {
         document.querySelectorAll('[data-queue-count]').forEach(el => { el.textContent = data.queue.actions || data.queue.count || 0; });
         const q=data.queue;
@@ -350,10 +477,50 @@
         document.querySelectorAll('[data-queue-pct]').forEach(el=>el.textContent=(q.percent??0)+' %');
         document.querySelectorAll('[data-queue-fill]').forEach(el=>el.style.width=Math.min(100,Math.max(0,q.percent??0))+'%');
         document.querySelectorAll('[data-queue-progress]').forEach(el=>el.setAttribute('aria-valuenow',q.percent??0));
-        document.querySelectorAll('[data-queue-errors]').forEach(el=>el.textContent=(q.failed||0)?`Chyb: ${q.failed}.`: '');
-        document.querySelectorAll('[data-queue-label]').forEach(el=>el.textContent=q.total?'Boban zpracovává úkoly':(q.failed?'Některé úkoly skončily chybou':'Poslední dávka dokončena'));
-
+        document.querySelectorAll('[data-queue-errors]').forEach(el=>el.textContent=(q.failed||0)?`Chyb: ${q.failed}.`+(q.last_failed_job?` Poslední úloha #${q.last_failed_job.id}.`:''): '');
+        const status = data.queue_status || 'Stav fronty zatím není dostupný.';
+        document.querySelectorAll('[data-queue-label]').forEach(el=>el.textContent=q.total?'Úlohy čekají nebo probíhají':(q.failed?'Některé úkoly skončily chybou':'Poslední dávka dokončena'));
+        const names = {seo_ai_prepare:'Příprava návrhů',seo_growth_prepare:'Růstové příležitosti',
+                       seo_apply_action:'Publikace změny',seo_verify_action:'Ověřování změny'};
+        const current=q.current_job;
+        const jobText=current?(names[current.job_type]||'Úkol')+' #'+current.id+
+                       (current.status==='retry'?' · opakuji po chybě':' · '+current.status):'';
+        const age=(data.worker && data.worker.age_seconds!=null)?' · poslední heartbeat před '+data.worker.age_seconds+' s':'';
+        document.querySelectorAll('[data-queue-activity]').forEach(el=>el.textContent=status+(jobText?' '+jobText+'.':'')+age);
         if ((data.queue.total || 0) === 0) document.querySelectorAll('[data-queue-card]').forEach(el => el.classList.add('queue-finished'));
+      }
+      if (data.connector_health && document.querySelector('[data-heartbeat-summary]')) {
+        const states=data.connector_health;
+        const labels={core:'Fresh Core',search_console:'Search Console',ga4:'GA4',gtm:'GTM'};
+        const good=states.filter(x=>x.status==='ok');
+        const problems=states.filter(x=>x.status==='failed' || x.status==='needs_setup');
+        const disconnected=states.filter(x=>x.status==='not_connected');
+        const active=states.length-disconnected.length;
+        const last=states.reduce((out,x)=>!out || x.checked_at>out ? x.checked_at:out,'');
+        let message=states.length ? 'Ověřeno '+good.length+'/'+active+' aktivních konektorů.' :
+          'Konektory zatím nemají ověřený živý stav.';
+        if (disconnected.length) message+=' Nepřipojeno: '+disconnected.length+'.';
+        if (problems.length) message+=' Nutná kontrola: '+problems.map(x=>labels[x.provider]||x.provider).join(', ')+'.';
+        if (last) {
+          const d=new Date(last);
+          message+=' Poslední kontrola: '+(Number.isNaN(d.getTime())?last:d.toLocaleString('cs-CZ'))+'.';
+        }
+        document.querySelectorAll('[data-heartbeat-summary]').forEach(el=>el.textContent=message);
+      }
+      if (data.daily_sync) {
+        const ds = data.daily_sync;
+        const runs = ds.runs || [];
+        const providerNames={core:'Fresh Core',search_console:'Search Console',ga4:'GA4',gtm:'GTM',pagespeed_crux:'PageSpeed'};
+        const completed=runs.filter(r=>r.status==='completed').length;
+        const errors=runs.filter(r=>r.status==='failed');
+        const inProgress=runs.filter(r=>r.status==='running');
+        const requested=runs.filter(r=>r.status==='requested');
+        let summary = !runs.length ? 'Dnes zatím nejsou evidovány běhy (pravidelný start od 05:00).' :
+          'Dnes hotovo '+completed+'/'+runs.length+' zdrojů.';
+        if (requested.length) summary += ' Ve frontě: '+requested.map(r=>providerNames[r.provider]||r.provider).join(', ')+'.';
+        if (inProgress.length) summary += ' Zpracovávám: '+inProgress.map(r=>providerNames[r.provider]||r.provider).join(', ')+'.';
+        if (errors.length) summary += ' Chyba: '+errors.map(r=>providerNames[r.provider]||r.provider).join(', ')+'. Boban bude opakovat podle plánu.';
+        document.querySelectorAll('[data-sync-summary]').forEach(el=>el.textContent=summary);
       }
     } catch (_) {}
   }
@@ -370,7 +537,9 @@
 
   if (document.body) {
     fetchNotifications();
+    refreshAdminJobLedger();
     window.setInterval(fetchNotifications, 12000);
+    window.setInterval(refreshAdminJobLedger, 12000);
   }
 
   // v0.7.2 mobile carousels: compact KPI/data panels, swipe + light auto-rotation.

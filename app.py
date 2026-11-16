@@ -28,6 +28,7 @@ import merchant_export
 import heureka_export
 import zbozi_export
 import meta_export
+import pinterest_catalog
 import meta_graph
 import zbozi_categories
 import zbozi_fenix
@@ -37,6 +38,11 @@ import feed_workflow
 import commerce_analytics
 import business_dashboard
 import advisor_intelligence
+import worker_runtime
+import sync_schedule
+import connector_health
+import execution_overview
+import job_monitor
 import contextlib
 import fcntl
 from bs4 import BeautifulSoup
@@ -1386,6 +1392,8 @@ _conn_analytics=db()
 try:
     commerce_analytics.ensure_schema(_conn_analytics, DB_BACKEND)
     advisor_intelligence.ensure_schema(_conn_analytics, DB_BACKEND)
+    sync_schedule.ensure_schema(_conn_analytics, DB_BACKEND)
+    connector_health.ensure_schema(_conn_analytics, DB_BACKEND)
     _conn_analytics.commit()
 finally:
     _conn_analytics.close()
@@ -1459,6 +1467,27 @@ try:
             _conn_catalog.execute('ALTER TABLE project_meta_feeds ADD COLUMN '+_meta_field+' '+_meta_type+' NULL')
 except Exception as _meta_error:
     raise RuntimeError('Nelze rozšířit stav Meta Graph API: '+str(_meta_error))
+
+# Pinterest feed: same approved catalog, distinct random URL and self-reported Business registration.
+# The registered flag is NOT live API confirmation, and no Pinterest credentials are stored.
+if DB_BACKEND == 'mysql':
+    _conn_catalog.execute("""CREATE TABLE IF NOT EXISTS project_pinterest_feeds (
+      project_id BIGINT UNSIGNED PRIMARY KEY,
+      feed_token VARCHAR(100) NOT NULL UNIQUE,
+      generated_at VARCHAR(32) NULL,
+      exported_count INT NOT NULL DEFAULT 0,
+      report_json LONGTEXT NULL,
+      registered TINYINT NOT NULL DEFAULT 0,
+      registered_at VARCHAR(32) NULL,
+      last_error TEXT NULL
+    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci""")
+else:
+    _conn_catalog.execute("""CREATE TABLE IF NOT EXISTS project_pinterest_feeds (
+      project_id INTEGER PRIMARY KEY, feed_token TEXT NOT NULL UNIQUE,
+      generated_at TEXT, exported_count INTEGER NOT NULL DEFAULT 0,
+      report_json TEXT, registered INTEGER NOT NULL DEFAULT 0,
+      registered_at TEXT, last_error TEXT
+    )""")
 # Zbozi shipping rules: optional user-confirmed delivery for ALL exported items.
 # Never invent carrier, price, COD or per-item availability.
 try:
@@ -5307,6 +5336,10 @@ def save_write_connector(project_id, endpoint, key):
     conn.close()
 
 
+class FreshCorePermanentError(ValueError):
+    """Target missing, forbidden or ambiguous: never silently retry a write."""
+
+
 def apply_seo_action(project, action):
     if project["core_write_status"] != "connected":
         raise ValueError("Fresh Core write bridge není připojen.")
@@ -5330,6 +5363,13 @@ def apply_seo_action(project, action):
             "change_id": f"wb-{action['id']}",
             "changes": proposed,
         }
+        target_url = str(action["target_url"] or "").strip()
+        if target_url:
+            target = safe_http_url(target_url)
+            if normalize_host(target) != normalize_host(project["site_url"]):
+                raise FreshCorePermanentError(
+                    "Úkol míří na jiný web než připojený projekt. Zápis jsem zastavil.")
+            payload["target_url"] = target
     r = requests.post(
         endpoint,
         json=payload,
@@ -5338,6 +5378,16 @@ def apply_seo_action(project, action):
     )
     data = r.json() if "application/json" in r.headers.get("content-type", "") else {"raw": r.text[:1000]}
     if r.status_code >= 300 or not data.get("success"):
+        code = str(data.get("code") or "")
+        details = data.get("data") or {}
+        details = details if isinstance(details, dict) else {}
+        if code in {"fresh_core_seo_post", "fresh_core_seo_url_not_found",
+                    "fresh_core_seo_url_invalid", "fresh_core_seo_post_id",
+                    "fresh_core_seo_target_mismatch"} or details.get("permanent") is True:
+            raise FreshCorePermanentError(
+                "Cílový produkt nebo stránku se nepodařilo bezpečně dohledat. "
+                "Zkontroluj URL a WordPress ID; po opravě můžeš úkol znovu schválit. "
+                f"(Fresh Core: {code or 'neplatný cíl'}, HTTP {r.status_code})")
         raise ValueError(f"Fresh Core změnu odmítl: HTTP {r.status_code}: {data}")
     return data
 
@@ -5565,25 +5615,29 @@ def unread_notification_count(user_id):
     return int(row["c"] if row else 0)
 
 
-def worker_state(name="default"):
+def worker_state(name="seo_queue"):
+    """Actual heartbeat of a running worker; an idle process is not active."""
     conn = db()
     row = conn.execute("SELECT * FROM workers WHERE name=?", (name,)).fetchone()
     conn.close()
     if not row:
-        return {"name": name, "status": "unknown", "healthy": False, "last_seen": None, "age_seconds": None}
+        return {"name": name, "status": "unknown", "healthy": False,
+                "last_seen": None, "age_seconds": None, "detail": {}}
     age = None
     try:
         if row["last_seen"]:
             age = max(0, int((datetime.now() - datetime.fromisoformat(row["last_seen"])).total_seconds()))
-    except Exception:
-        age = None
-    return {
-        "name": name,
-        "status": row["status"],
-        "healthy": age is not None and age <= WORKER_STALE_SECONDS,
-        "last_seen": row["last_seen"],
-        "age_seconds": age,
-    }
+    except (TypeError, ValueError):
+        pass
+    try:
+        original_detail = json.loads(row["detail_json"] or "{}")
+    except (TypeError, ValueError):
+        original_detail = {}
+    allowed = {"phase", "job_id", "job_type", "project_id", "processed", "started_at"}
+    detail = {k: v for k, v in original_detail.items() if k in allowed} if isinstance(original_detail, dict) else {}
+    return {"name": name, "status": row["status"],
+            "healthy": bool(age is not None and age <= WORKER_STALE_SECONDS and row["status"] == "running"),
+            "last_seen": row["last_seen"], "age_seconds": age, "detail": detail}
 
 
 def touch_worker(name="default", status="running", detail=None):
@@ -5603,31 +5657,84 @@ def touch_worker(name="default", status="running", detail=None):
     conn.commit(); conn.close()
 
 
-def kick_background_worker(command="seo-apply"):
-    """Best-effort immediate worker kick. The cPanel cron remains the safety net.
+def request_manual_data_sync(project_id, provider=None):
+    """Durably request sync before the best-effort HTTP subprocess kick.
 
-    Worker stdout/stderr is appended to worker.log so a background failure is
-    diagnosable instead of disappearing into /dev/null.
+    A five-minute cron can fulfil the request even if Passenger kills its
+    detached process. Never enqueue sources that are not configured.
     """
+    conn = db()
+    try:
+        project = conn.execute("SELECT * FROM projects WHERE id=?", (project_id,)).fetchone()
+    finally:
+        conn.close()
+    if not project or not project_automation_allowed(project_id):
+        return 0
+    sources = {
+        "core": bool(project["core_manifest_url"]),
+        "search_console": bool((row := integration_row(project_id, "search_console")) and row["status"] == "connected"),
+        "ga4": bool((row := integration_row(project_id, "ga4")) and row["status"] == "connected"),
+        "gtm": bool((row := integration_row(project_id, "gtm")) and row["status"] == "connected"
+                    and integration_config(row).get("selected_container")),
+        "pagespeed_crux": bool(pagespeed_ready()),
+    }
+    day = worker_runtime.prague_now().date().isoformat()
+    conn = db()
+    count = 0
+    try:
+        for name, available in sources.items():
+            if not available or (provider and provider != name):
+                continue
+            existing = sync_schedule.get_state(conn, project_id, name, day)
+            if existing and existing.get("status") == "running":
+                continue
+            sync_schedule.record_state(conn, DB_BACKEND, project_id, name, day, "requested")
+            count += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return count
+
+
+def kick_background_worker(command="work-queue", project_id=None, provider=None):
+    """Request a whitelisted CLI subprocess; Popen is not evidence of completion.
+
+    CLI flock serialises concurrent manual and cron workers on this host.
+    """
+    commands = {
+        "work-queue": ["work-queue"],
+        "daily-sync": ["daily-sync"],
+        "daily-sync-force": ["daily-sync", "--force"],
+        "tick": ["tick"],
+        "catalog-sync": ["catalog-sync"],
+    }
+    args = commands.get(command)
+    if not args:
+        raise ValueError("Nepovolený příkaz workeru.")
+    args = list(args)
+    if project_id is not None:
+        if command not in {"daily-sync", "daily-sync-force"} or not str(project_id).isdigit():
+            raise ValueError("Neplatný projekt pro synchronizaci.")
+        args.extend(["--project", str(int(project_id))])
+    if provider is not None:
+        if command not in {"daily-sync", "daily-sync-force"} or provider not in {"core", "search_console", "ga4", "gtm", "pagespeed_crux"}:
+            raise ValueError("Nepovolený zdroj synchronizace.")
+        args.extend(["--provider", provider])
     try:
         venv = os.getenv("VIRTUAL_ENV", "").strip()
         venv_python = Path(venv) / "bin" / "python" if venv else None
         python_bin = str(venv_python) if venv_python and venv_python.exists() else sys.executable
-        log_path = BASE_DIR / "worker.log"
-        log_handle = open(log_path, "a", encoding="utf-8")
-        try:
+        with open(BASE_DIR / "worker.log", "a", encoding="utf-8") as log_handle:
             subprocess.Popen(
-                [python_bin, str(BASE_DIR / "manage.py"), command],
+                [python_bin, str(BASE_DIR / "manage.py"), *args],
                 cwd=str(BASE_DIR), stdout=log_handle, stderr=log_handle,
                 start_new_session=True, close_fds=True,
             )
-        finally:
-            log_handle.close()
         return True
     except Exception as exc:
         try:
             with open(BASE_DIR / "worker.log", "a", encoding="utf-8") as f:
-                f.write(f"{now()} worker kick failed: {exc}\n")
+                f.write(f"{now()} worker kick failed: {type(exc).__name__}: {str(exc)[:180]}\\n")
         except Exception:
             pass
         return False
@@ -5670,7 +5777,7 @@ def queue_seo_apply_jobs(project_id, action_ids, kick=True, notify=True):
             [now(), group_id, project_id, *inserted_ids]
         )
     conn.commit(); conn.close()
-    kicked = kick_background_worker("seo-apply") if (kick and inserted_ids) else False
+    kicked = kick_background_worker("work-queue") if (kick and inserted_ids) else False
     if notify and inserted_ids:
         note = (f"Zařadil jsem {len(inserted_ids)} úkolů do fronty. "
                 + ("Požádal jsem worker o spuštění; skutečné provedení ještě není potvrzené. " if kicked else
@@ -5692,8 +5799,12 @@ def queue_summary(project_id):
     """Latest batch progress; do not conflate pending jobs with completed tasks."""
     conn = db()
     latest = conn.execute(
-        "SELECT group_id FROM jobs WHERE project_id=? AND job_type LIKE ? AND group_id IS NOT NULL ORDER BY id DESC LIMIT 1",
-        (project_id, "seo_%")
+        """SELECT group_id FROM jobs
+           WHERE project_id=? AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+             AND group_id IS NOT NULL
+           GROUP BY group_id
+           ORDER BY MAX(CASE WHEN status IN ('queued','retry','running') THEN 1 ELSE 0 END) DESC,
+                    MAX(id) DESC LIMIT 1""", (project_id,)
     ).fetchone()
     data = {"queued": 0, "running": 0, "retry": 0, "failed": 0, "completed": 0, "canceled": 0,
             "total": 0, "count": 0, "percent": 100, "batch_total": 0, "batch_done": 0, "group_id": None}
@@ -5717,8 +5828,99 @@ def queue_summary(project_id):
     for r in pending: data[str(r["status"]).lower()] = int(r["c"])
     data["total"] = data["queued"] + data["running"] + data["retry"]
     data["count"] = data["total"]
+    current = conn.execute(
+        """SELECT id,job_type,status,attempts,run_after,updated_at,locked_at
+           FROM jobs WHERE project_id=?
+             AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+             AND status IN ('running','retry','queued')
+           ORDER BY CASE status WHEN 'running' THEN 0 WHEN 'retry' THEN 1 ELSE 2 END, id LIMIT 1""",
+        (project_id,)
+    ).fetchone()
+    data["current_job"] = ({"id": current["id"], "job_type": current["job_type"],
+                            "status": current["status"], "attempts": current["attempts"],
+                            "retry_at": current["run_after"], "updated_at": current["updated_at"]}
+                           if current else None)
+    recent_failure = conn.execute(
+        """SELECT id,job_type,updated_at FROM jobs WHERE project_id=?
+           AND job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action')
+           AND status='failed' ORDER BY id DESC LIMIT 1""", (project_id,)
+    ).fetchone()
+    data["last_failed_job"] = ({"id": recent_failure["id"], "job_type": recent_failure["job_type"],
+                                "updated_at": recent_failure["updated_at"]} if recent_failure else None)
     conn.close()
     return data
+
+
+def boban_work_overview(project_id):
+    """What Boban does, why and when, without exposing raw DB jobs to the user."""
+    conn = db()
+    try:
+        active = conn.execute(
+            """SELECT j.id,j.action_id,j.project_id,j.job_type,j.status,j.run_after,
+                      j.created_at,j.started_at,j.updated_at,
+                      a.reason AS action_reason,a.target_url
+               FROM jobs j LEFT JOIN actions a ON a.id=j.action_id AND a.project_id=j.project_id
+               WHERE j.project_id=? AND j.job_type IN
+                 ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+                 AND j.status IN ('queued','running','retry')
+               ORDER BY CASE j.status WHEN 'running' THEN 0 ELSE 1 END,
+                        CASE j.job_type WHEN 'seo_apply_action' THEN 0 WHEN 'seo_verify_action' THEN 1 ELSE 2 END,
+                        j.id LIMIT 250""", (project_id,)
+        ).fetchall()
+        full_count = int(conn.execute(
+            """SELECT COUNT(*) AS c FROM jobs WHERE project_id=?
+               AND job_type IN ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+               AND status IN ('queued','running','retry')""", (project_id,)
+        ).fetchone()["c"] or 0)
+        history = conn.execute(
+            """SELECT job_type,started_at,finished_at FROM jobs
+               WHERE job_type IN ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+                 AND status='completed' AND started_at IS NOT NULL AND finished_at IS NOT NULL
+               ORDER BY id DESC LIMIT 220"""
+        ).fetchall()
+        awaiting = int(conn.execute(
+            """SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved')""",
+            (project_id,)
+        ).fetchone()["c"] or 0)
+        failed_actions = int(conn.execute(
+            "SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status='failed'", (project_id,)
+        ).fetchone()["c"] or 0)
+        first = active[0]["id"] if active else 0
+        ahead = int(conn.execute(
+            """SELECT COUNT(*) AS c FROM jobs
+               WHERE id<? AND project_id<>? AND job_type IN
+                 ('seo_apply_action','seo_verify_action','seo_ai_prepare','seo_growth_prepare')
+                 AND status IN ('queued','running','retry') AND (run_after IS NULL OR run_after<=?)""",
+            (first, project_id, now())
+        ).fetchone()["c"] or 0) if first else 0
+    finally:
+        conn.close()
+    worker = worker_state("seo_queue")
+    worker["scheduler_confirmed"] = bool(
+        worker.get("age_seconds") is not None and worker["age_seconds"] <= 140
+        and worker["status"] in {"running", "idle"}
+    )
+    result = execution_overview.overview(
+        [dict(row) for row in active], [dict(row) for row in history],
+        worker, awaiting, global_ahead=ahead, failed_actions=failed_actions
+    )
+    if full_count > len(active):
+        result["total"] = full_count
+        result["eta"] = None
+        result["eta_confidence"] = "too_many_jobs_to_estimate"
+    return result
+
+
+def job_monitor_snapshot(project_id=None, status=None, limit=60):
+    """Read-only timeline from the same persistent jobs table used by the worker."""
+    conn=db()
+    try:
+        items=job_monitor.load_jobs(conn,project_id=project_id,status=status,limit=limit)
+        summary=job_monitor.stats(conn,project_id=project_id)
+    finally:
+        conn.close()
+    return {"items": items, "summary": summary,
+            "movement": job_monitor.movement_state(summary,worker_state("seo_queue"))}
 
 
 def queue_ai_prepare_jobs(project_id, issue_rows, auto_apply=False, source="user"):
@@ -5755,7 +5957,7 @@ def queue_ai_prepare_jobs(project_id, issue_rows, auto_apply=False, source="user
         project_id, chat_body,
         actions=[{"label": "Sledovat průběh", "url": f"/projects/{project_id}/actions?view=todo", "primary": True}]
     )
-    kicked = kick_background_worker("seo-apply")
+    kicked = kick_background_worker("work-queue")
     return {"group_id": group_id, "count": len(issue_ids), "chunks": chunks, "worker_kicked": kicked}
 
 
@@ -5782,7 +5984,7 @@ def queue_growth_prepare_job(project_id, candidates, source="operator"):
         project_id, "Analyzuji růstové příležitosti", f"Vzal jsem si {len(safe)} konkrétní příležitosti ze Search Console a prověřím, zda z nich umím připravit bezpečný zásah ke schválení.",
         url=f"/projects/{project_id}/actions?view=todo", level="info", kind=f"growth_group_{group_id}", user_id=owner_id
     )
-    kicked=kick_background_worker("seo-apply")
+    kicked=kick_background_worker("work-queue")
     return {"group_id": group_id, "count": len(safe), "worker_kicked": kicked}
 
 
@@ -6168,20 +6370,36 @@ def operator_cycle(project_id, force=False):
     if not project or not project["core_manifest_url"]:
         return {"skipped": True, "reason": "Fresh Core není připojen."}
     strategy=project_strategy(project); mode=strategy.get("mode") or "specialist"
+    conn=db()
+    try:
+        outstanding=int(conn.execute(
+            "SELECT COUNT(*) AS c FROM actions WHERE project_id=? AND status IN ('draft','approved','failed')",
+            (project_id,)
+        ).fetchone()["c"] or 0)
+        active_prepare=int(conn.execute(
+            """SELECT COUNT(*) AS c FROM jobs WHERE project_id=?
+               AND job_type IN ('seo_ai_prepare','seo_growth_prepare')
+               AND status IN ('queued','retry','running')""",(project_id,)
+        ).fetchone()["c"] or 0)
+    finally:
+        conn.close()
+    if not execution_overview.can_prepare_more(active_prepare, outstanding):
+        return {"skipped": True, "reason": "Čekám na dokončení přípravy nebo na schválení hotových návrhů.",
+                "awaiting_approval": outstanding, "active_prepare": active_prepare}
+    remaining=min(4, max(0, 8 - outstanding))
     plan=build_operator_plan(project_id, persist=True)
     prepared=0; queued=None; growth_queued=None
-    if mode in {"specialist", "autopilot"}:
-        rows=operator_actionable_issue_rows(project_id, min(AI_BATCH_LIMIT, 20))
+    if mode in {"specialist", "autopilot"} and remaining:
+        rows=operator_actionable_issue_rows(project_id, min(AI_BATCH_LIMIT, remaining, 3))
         if rows:
             queued=queue_ai_prepare_jobs(project_id, rows, auto_apply=False, source="operator")
             prepared += len(rows)
-        # The audit fixes hygiene. Search Console opportunities drive growth.
-        # Queue a small second pass that may optimize the real landing page, but
-        # only when the AI can justify a safe metadata change.
-        growth = operator_growth_candidates(project_id, 3)
-        if growth:
-            growth_queued=queue_growth_prepare_job(project_id, growth, source="operator")
-            prepared += int(growth_queued.get("count") or 0)
+        left=max(0,remaining-prepared)
+        if left:
+            growth = operator_growth_candidates(project_id, min(left,2))
+            if growth:
+                growth_queued=queue_growth_prepare_job(project_id, growth, source="operator")
+                prepared += int(growth_queued.get("count") or 0)
     ts=now(); conn=db(); conn.execute("UPDATE projects SET last_operator_run=?,updated_at=? WHERE id=?", (ts, ts, project_id)); conn.commit(); conn.close()
     if not prepared:
         add_boban_message(project_id, "Prošel jsem aktuální data a pracovní plán. Teď nemám nový bezpečný zásah, který bych mohl bez dalšího kontextu sám připravit. Prioritní body jsem seřadil na nástěnce.",
@@ -6901,7 +7119,22 @@ def admin_console():
     smtp=smtp_config(); smtp_safe=dict(smtp); smtp_safe.pop("password",None)
     manifest_token=(os.getenv("DEVELOPER_MANIFEST_TOKEN") or "").strip()
     manifest_url=url_for("developer_manifest", token=manifest_token, _external=True, _scheme="https") if manifest_token else None
-    return render_template("admin.html", stats=_admin_stats(), users=users, rules=rules, projects=projects, smtp=smtp_safe, chat_settings=chat_settings, manifest_url=manifest_url, diagnostic_url=(url_for('safe_diagnostic_manifest',token=_safe_diagnostic_url_token(),_external=True,_scheme='https') if _safe_diagnostic_url_token() else None), smart_card_registry=SMART_CARD_REGISTRY, smart_card_enabled=smart_card_settings(), knowledge_entries=library_rows(limit=100), merchant_developer_registration=(get_system_setting("merchant_developer_registration", {}) or {}), merchant_registration_csrf=_merchant_registration_form_csrf(), google_oauth_ready=google_oauth_ready())
+    monitor_status = request.args.get("jobs_status", "")
+    monitor_project = request.args.get("jobs_project", type=int)
+    if monitor_status not in job_monitor.STATUSES:
+        monitor_status = ""
+    return render_template("admin.html", stats=_admin_stats(), users=users, rules=rules, projects=projects, smtp=smtp_safe, chat_settings=chat_settings, manifest_url=manifest_url, diagnostic_url=(url_for('safe_diagnostic_manifest',token=_safe_diagnostic_url_token(),_external=True,_scheme='https') if _safe_diagnostic_url_token() else None), smart_card_registry=SMART_CARD_REGISTRY, smart_card_enabled=smart_card_settings(), knowledge_entries=library_rows(limit=100), merchant_developer_registration=(get_system_setting("merchant_developer_registration", {}) or {}), merchant_registration_csrf=_merchant_registration_form_csrf(), google_oauth_ready=google_oauth_ready(), job_monitor=job_monitor_snapshot(project_id=monitor_project,status=monitor_status or None,limit=70), jobs_filter_project=monitor_project, jobs_filter_status=monitor_status)
+
+
+@app.route("/admin/jobs/status", methods=["GET"])
+@login_required
+@admin_required
+def admin_jobs_status():
+    project_id=request.args.get("project_id", type=int)
+    status=request.args.get("status","")
+    if status not in job_monitor.STATUSES:
+        status=None
+    return jsonify({"ok": True, "monitor":job_monitor_snapshot(project_id=project_id,status=status,limit=70)})
 
 
 @app.route('/admin/merchant/register/start', methods=['POST'])
@@ -7060,8 +7293,21 @@ def admin_automation_update(rule_key):
 @login_required
 @admin_required
 def admin_automation_run_now():
-    kicked = kick_background_worker("tick")
-    flash("Spustil jsem systémový tick na pozadí." if kicked else "Tick se nepodařilo spustit. Zkontroluj worker.log a cron.", "success" if kicked else "error")
+    choice = request.form.get("scope", "work-queue")
+    command = "daily-sync-force" if choice == "daily-sync-force" else "work-queue"
+    requested = 0
+    if command == "daily-sync-force":
+        conn = db()
+        try:
+            ids = [int(row["id"]) for row in conn.execute("SELECT id FROM projects").fetchall()]
+        finally:
+            conn.close()
+        requested = sum(request_manual_data_sync(pid) for pid in ids)
+    kicked = kick_background_worker(command) if command == "work-queue" or requested else False
+    flash(("Požadavek je předán serveru; dokončení ověř podle průběhu a logů."
+           if kicked else "Požadavek je uložený a převezme jej cron.")
+          if command == "work-queue" or requested else "Není co znovu synchronizovat.",
+          "info")
     return redirect(url_for("admin_console") + "#automation")
 
 
@@ -7782,6 +8028,42 @@ def operator_run(project_id):
     return redirect(url_for("project", project_id=project_id) + "#boban-chat")
 
 
+@app.route('/admin/deployment/status', methods=['GET'])
+@login_required
+@admin_required
+def admin_deployment_status():
+    """Read-only code fingerprints, independent of the admin template."""
+    names = (
+        'app.py', 'manage.py', 'pinterest_catalog.py',
+        'templates/partials/job_ledger.html', 'templates/ecommerce.html',
+        'templates/connectors.html', 'scripts/run_boban_cron.sh',
+        'scripts/install_seo_worker_cron.sh', '.gitattributes'
+    )
+    fingerprints = {}
+    shell_health = {}
+    for name in names:
+        source = BASE_DIR / name
+        raw = source.read_bytes() if source.is_file() else None
+        if raw is None:
+            fingerprints[name] = None
+            continue
+        normalized = raw.replace(b'\r\n', b'\n')
+        fingerprints[name] = hashlib.sha1(
+            b'blob ' + str(len(normalized)).encode('ascii') + b'\x00' + normalized
+        ).hexdigest()
+        if name.endswith('.sh'):
+            shell_health[name] = 'LF' if b'\r\n' not in raw else 'CRLF – cron may fail'
+    response = jsonify({
+        'release': 'bob-unified-2026-11-16',
+        'app_version': APP_VERSION,
+        'files': fingerprints,
+        'shell_scripts': shell_health,
+        'note': 'Souborové otisky nedokládají funkčnost serverového cronu.'
+    })
+    response.headers['Cache-Control'] = 'no-store, private'
+    return response
+
+
 @app.route("/projects/<int:project_id>/connectors")
 @login_required
 def connectors(project_id):
@@ -7798,6 +8080,7 @@ def connectors(project_id):
     merchant_config = integration_config(integration_map.get("merchant_center"))
     heureka_config = heureka_settings(project_id)
     zbozi_api_config = integration_config(integration_map.get("zbozi_fenix"))
+    pinterest_config = pinterest_settings(project_id)
     meta_config = meta_settings(project_id)
     meta_config["api_token_cipher"] = None if not meta_config.get("api_token_cipher") else "configured"
     if 'merchant_csrf_token' not in session:
@@ -7811,7 +8094,7 @@ def connectors(project_id):
     return render_template(
         "connectors.html",
         project=p, integrations=integrations, integration_map=integration_map,
-        gsc_config=gsc_config, ga4_config=ga4_config, gtm_config=gtm_config, merchant_config=merchant_config, heureka_config=heureka_config, zbozi_api_config=zbozi_api_config, meta_config=meta_config, merchant_csrf=session['merchant_csrf_token'], gsc_sitemaps=sitemaps,
+        gsc_config=gsc_config, ga4_config=ga4_config, gtm_config=gtm_config, merchant_config=merchant_config, heureka_config=heureka_config, zbozi_api_config=zbozi_api_config, pinterest_config=pinterest_config, meta_config=meta_config, merchant_csrf=session['merchant_csrf_token'], gsc_sitemaps=sitemaps,
         performance=latest_source_snapshot(project_id, "pagespeed_crux"), gtm=latest_source_snapshot(project_id, "gtm"),
         connector_catalog=CONNECTOR_CATALOG, google_oauth_ready=google_oauth_ready(), pagespeed_ready=pagespeed_ready(), commerce_read=core_catalog_summary(project_id),
     )
@@ -7834,11 +8117,12 @@ def core_connect(project_id):
 @login_required
 def core_sync(project_id):
     project_for_user(project_id)
-    try:
-        sync_core(project_id)
-        flash("Fresh Core data byla znovu načtena.", "success")
-    except Exception as exc:
-        flash(f"Synchronizace selhala: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="core")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="core") if requested else False
+    flash(("Ruční načtení core je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(url_for("project", project_id=project_id))
 
 
@@ -8419,6 +8703,155 @@ def catalog_meta_public(token):
     return response
 
 
+
+def pinterest_settings(project_id):
+    conn=db()
+    try:
+        row=conn.execute('SELECT * FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
+        return dict(row) if row else {}
+    finally:
+        conn.close()
+
+
+def catalog_publish_pinterest(project_id):
+    """One approved selection, Pinterest-specific RSS, atomic file, separate output.
+
+    An already published Google snapshot of the CURRENT approved revision is
+    sufficient during an unfinished new sync. Never publish an unapproved
+    revision or a partly imported product catalog.
+    """
+    ready=catalog_ready(project_id)
+    conn=db()
+    try:
+        project=conn.execute('SELECT * FROM projects WHERE id=?',(project_id,)).fetchone()
+        state=feed_workflow.state(conn,project_id)
+        if not project:raise ValueError('Projekt neexistuje.')
+        if not state.get('approved'):raise ValueError('Nejdříve schval společný sortiment.')
+        rec=conn.execute('SELECT feed_token FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
+        token=rec['feed_token'] if rec else secrets.token_urlsafe(32)
+        google=conn.execute(
+            'SELECT feed_token,generated_at,report_json FROM project_google_feeds WHERE project_id=?',
+            (project_id,)
+        ).fetchone()
+        has_current_google=bool(google and google['generated_at']
+                                and int(state.get('published_revision') or 0)==int(state.get('revision') or 0))
+    finally:
+        conn.close()
+    if ready:
+        parents,variants,excluded,_=catalog_cached_data(project_id)
+        if len(parents)+len(variants)>CATALOG_MAX_EXPORT_ROWS:
+            raise ValueError('Katalog překročil bezpečný limit exportu.')
+        categories=(refresh_catalog_categories(project_id,project['site_url'])
+                    if excluded['category'] else (cached_catalog_categories(project_id)
+                    or feed_workflow.category_tree(parents)))
+        chosen_p,chosen_v,summary=feed_workflow.selected(parents,variants,excluded,categories=categories)
+        forbidden=feed_workflow.excluded_category_ids(categories,excluded['category'])
+        if any(feed_workflow.product_category_ids(p)&forbidden for p in chosen_p):
+            raise ValueError('Export obsahuje vyloučenou kategorii.')
+        xml,report=pinterest_catalog.build_pinterest_feed(project['name'],chosen_p,chosen_v,project['site_url'])
+        report['selection']=summary
+        report['source']='current_approved_catalog'
+    else:
+        if not has_current_google:
+            raise ValueError('Načítání produktů/variant ještě není dokončeno a nemám Google XML aktuální schválené revize. '
+                             'Dokonči import nebo nejdřív schval a publikuj Google katalog.')
+        google_path=CATALOG_FEED_DIR/('google_'+str(project_id)+'_'+google['feed_token']+'.xml')
+        if not google_path.is_file():
+            raise ValueError('Poslední schválené Google XML není na serveru. Ověř synchronizaci generated_feeds.')
+        try:
+            source_report=json.loads(google['report_json'] or '{}')
+        except (TypeError,ValueError):
+            source_report={}
+        xml,report=pinterest_catalog.convert_google_xml(
+            google_path.read_bytes(),project['name'],source_report
+        )
+    if not report.get('exported'):
+        raise ValueError('Pinterest XML nemá žádnou platnou nabídku.')
+    CATALOG_FEED_DIR.mkdir(parents=True,exist_ok=True)
+    target=CATALOG_FEED_DIR/('pinterest_'+str(project_id)+'_'+token+'.xml')
+    temp=target.with_name(target.name+'.'+secrets.token_hex(8)+'.tmp')
+    try:
+        with temp.open('wb') as output:
+            output.write(xml);output.flush();os.fsync(output.fileno())
+        temp.replace(target)
+    finally:
+        temp.unlink(missing_ok=True)
+    conn=db()
+    try:
+        values=(project_id,token,now(),int(report['exported']),json.dumps(report,ensure_ascii=False))
+        if DB_BACKEND=='mysql':
+            conn.execute("""INSERT INTO project_pinterest_feeds
+                 (project_id,feed_token,generated_at,exported_count,report_json)
+                 VALUES(?,?,?,?,?) ON DUPLICATE KEY UPDATE
+                 generated_at=VALUES(generated_at),exported_count=VALUES(exported_count),
+                 report_json=VALUES(report_json),last_error=NULL""",values)
+        else:
+            conn.execute("""INSERT INTO project_pinterest_feeds
+                 (project_id,feed_token,generated_at,exported_count,report_json)
+                 VALUES(?,?,?,?,?) ON CONFLICT(project_id) DO UPDATE SET
+                 generated_at=excluded.generated_at,exported_count=excluded.exported_count,
+                 report_json=excluded.report_json,last_error=NULL""",values)
+        conn.commit()
+    finally:
+        conn.close()
+    return report
+
+
+@app.route('/catalog/pinterest/<token>.xml',methods=['GET'])
+def catalog_pinterest_public(token):
+    if len(token)<32 or len(token)>100 or not re.fullmatch(r'[A-Za-z0-9_-]+',token):
+        abort(404)
+    conn=db()
+    try:
+        rec=conn.execute('SELECT project_id FROM project_pinterest_feeds WHERE feed_token=?',(token,)).fetchone()
+    finally:
+        conn.close()
+    if not rec:abort(404)
+    path=CATALOG_FEED_DIR/('pinterest_'+str(rec['project_id'])+'_'+token+'.xml')
+    if not path.is_file():abort(404)
+    from flask import send_file
+    response=send_file(path,mimetype='application/xml',conditional=True,max_age=300)
+    response.headers['Cache-Control']='public, max-age=300'
+    return response
+
+
+@app.route('/projects/<int:project_id>/ecommerce/pinterest/build',methods=['POST'])
+@login_required
+def ecommerce_pinterest_build(project_id):
+    project_for_user(project_id)
+    if not current_user.can_edit:abort(403)
+    merchant_check_csrf()
+    try:
+        with commerce_sync_guard(project_id):
+            result=catalog_publish_pinterest(project_id)
+        flash('Pinterest XML připraveno: '+str(result['exported'])+' produktů. Přidej veřejnou URL do Pinterest Business.','success')
+    except Exception as exc:
+        flash('Pinterest export: '+str(exc)[:210],'error')
+    return redirect(url_for('ecommerce',project_id=project_id)+'#pinterest-platform')
+
+
+@app.route('/projects/<int:project_id>/connectors/pinterest',methods=['POST'])
+@login_required
+def pinterest_connector_save(project_id):
+    project_for_user(project_id)
+    if not current_user.can_edit:abort(403)
+    merchant_check_csrf()
+    confirmed=request.form.get('registered')=='1'
+    conn=db()
+    try:
+        row=conn.execute('SELECT generated_at FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
+        if confirmed and not (row and row['generated_at']):
+            flash('Nejdříve zveřejni Pinterest XML v E-commerce.', 'warning')
+            return redirect(url_for('connectors',project_id=project_id)+'#pinterest-connector')
+        conn.execute('UPDATE project_pinterest_feeds SET registered=?,registered_at=? WHERE project_id=?',
+                     (1 if confirmed else 0,now() if confirmed else None,project_id))
+        conn.commit()
+    finally:
+        conn.close()
+    flash('Uložil jsem tvoje potvrzení. Načtení a schválení Pinterestem zatím není ověřené.','info')
+    return redirect(url_for('connectors',project_id=project_id)+'#pinterest-connector')
+
+
 @app.route('/projects/<int:project_id>/ecommerce/meta/build',methods=['POST'])
 @login_required
 def ecommerce_meta_build(project_id):
@@ -8930,6 +9363,15 @@ def catalog_workflow_tick(project_id):
                             conn_err.execute('UPDATE project_meta_feeds SET last_error=? WHERE project_id=?',(str(meta_exc)[:240],project_id))
                             conn_err.commit()
                         finally:conn_err.close()
+                if pinterest_settings(project_id).get('generated_at'):
+                    try:catalog_publish_pinterest(project_id)
+                    except Exception as pinterest_exc:
+                        conn_err=db()
+                        try:
+                            conn_err.execute('UPDATE project_pinterest_feeds SET last_error=? WHERE project_id=?',
+                                             (str(pinterest_exc)[:240],project_id))
+                            conn_err.commit()
+                        finally:conn_err.close()
                 feed_workflow.update(db_conn:=db(),DB_BACKEND,project_id,now(),mode='active',last_error=None)
                 db_conn.close()
                 return 'publikováno '+str(report['exported'])
@@ -9085,6 +9527,27 @@ def ecommerce(project_id):
         zbozi_config['shipping_rules']=json.loads(zbozi_config.get('shipping_rules_json') or '[]')
     except (TypeError,ValueError):zbozi_config['shipping_rules']=[]
     zbozi_api_config=integration_config(integration_row(project_id,"zbozi_fenix"))
+    pinterest_config=pinterest_settings(project_id)
+    pinterest_complete=bool(
+        info['catalog'].get('next_page')==0 and info['catalog'].get('finished_at')
+        and info['variants_state'] and info['variants_state'].get('next_page')==0
+        and info['variants_state'].get('finished_at')
+    )
+    google_snapshot_current=bool(
+        info['feed'] and info['feed'].get('generated_at')
+        and int(workflow.get('published_revision') or 0)==int(workflow.get('revision') or 0)
+    )
+    pinterest_can_build=bool(workflow.get('approved')
+                             and (pinterest_complete or google_snapshot_current))
+    pinterest_gate_reason=(
+        'Nejdříve schval výběr sortimentu v katalogu.' if not workflow.get('approved') else
+        'Produkty a varianty se stále načítají. Nemáme Google XML stejné schválené revize.' if not pinterest_can_build else
+        'Použiji poslední schválené publikované Google XML.' if not pinterest_complete else
+        'Použiji kompletní aktuální schválený katalog.'
+    )
+    if pinterest_config.get('report_json'):
+        try:pinterest_config['report']=json.loads(pinterest_config['report_json'])
+        except (ValueError,TypeError):pinterest_config['report']={}
     meta_config=meta_settings(project_id)
     meta_config["api_token_cipher"] = None if not meta_config.get("api_token_cipher") else "configured"
     try:
@@ -9097,7 +9560,7 @@ def ecommerce(project_id):
     if heureka_config.get('report_json'):
         try:heureka_config['report']=json.loads(heureka_config['report_json'])
         except (ValueError,TypeError):heureka_config['report']={}
-    return render_template('ecommerce.html',merchant_connected=bool(merchant_row and merchant_row['status'] != 'disconnected'),merchant_csrf=session['merchant_csrf_token'],merchant_snapshot=merchant_snapshot,heureka_config=heureka_config,zbozi_config=zbozi_config,zbozi_api_config=zbozi_api_config,meta_config=meta_config,project=project,ecommerce=info,export_report=json.loads(info['feed']['report_json']) if info['feed'] and info['feed'].get('report_json') else {},workflow=workflow,category_rows=cats,excluded_categories=excluded['category'],inherited_excluded_categories=inherited_excluded,excluded_products=excluded['product'],product_rows=rows,product_page=page,product_pages=max(1,(len(filtered)+34)//35),product_query=q,selection_preview=preview,product_visible_total=len(filtered),category_visible_total=len(listing))
+    return render_template('ecommerce.html',merchant_connected=bool(merchant_row and merchant_row['status'] != 'disconnected'),merchant_csrf=session['merchant_csrf_token'],merchant_snapshot=merchant_snapshot,heureka_config=heureka_config,zbozi_config=zbozi_config,zbozi_api_config=zbozi_api_config,pinterest_config=pinterest_config,pinterest_can_build=pinterest_can_build,pinterest_gate_reason=pinterest_gate_reason,meta_config=meta_config,project=project,ecommerce=info,export_report=json.loads(info['feed']['report_json']) if info['feed'] and info['feed'].get('report_json') else {},workflow=workflow,category_rows=cats,excluded_categories=excluded['category'],inherited_excluded_categories=inherited_excluded,excluded_products=excluded['product'],product_rows=rows,product_page=page,product_pages=max(1,(len(filtered)+34)//35),product_query=q,selection_preview=preview,product_visible_total=len(filtered),category_visible_total=len(listing))
 
 
 @app.route('/projects/<int:project_id>/ecommerce/sync-variants',methods=['POST'])
@@ -9401,7 +9864,12 @@ def actions(project_id):
     rows = conn.execute(
         f"""SELECT actions.*,
                    (SELECT j.result_json FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_result,
-                   (SELECT j.status FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_status
+                   (SELECT j.status FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_status,
+                   (SELECT j.created_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_created_at,
+                   (SELECT j.started_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_started_at,
+                   (SELECT j.updated_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_updated_at,
+                   (SELECT j.finished_at FROM jobs j WHERE j.action_id=actions.id AND j.job_type='seo_apply_action' ORDER BY j.id DESC LIMIT 1) AS latest_job_finished_at,
+                   (SELECT i.title FROM issues i WHERE i.id=actions.issue_id AND i.project_id=actions.project_id LIMIT 1) AS issue_title
             FROM actions WHERE project_id=? AND {status_where} ORDER BY id DESC LIMIT 500""", (project_id,)
     ).fetchall()
     counts = conn.execute(
@@ -9430,9 +9898,12 @@ def actions(project_id):
                 item["visible_error"] = ""
         else:
             item["visible_error"] = str(item.get("last_error") or "")[:1200]
+        item["action_reason"]=item.get("reason")
+        item["display_title"]=job_monitor.title_for(item)
         cards.append(item)
     return render_template(
         "actions.html", project=p, actions=cards,
+        job_monitor=job_monitor_snapshot(project_id=project_id,limit=45),
         gsc=latest_source_snapshot(project_id, "search_console"),
         view=view, counts=counts or {"todo_count": 0, "done_count": 0, "hidden_count": 0, "total_count": 0},
         queue=queue_summary(project_id), worker=worker_state('seo_queue')
@@ -9627,6 +10098,8 @@ def action_verify(project_id, action_id):
 @login_required
 def api_notifications():
     project_id = request.args.get("project_id", type=int)
+    if project_id is not None:
+        project_for_user(project_id)
     conn = db()
     visible = "dismissed_at IS NULL AND (snoozed_until IS NULL OR snoozed_until<=?)"
     if project_id:
@@ -9646,7 +10119,46 @@ def api_notifications():
     conn.close()
     items = [dict(r) for r in rows]
     q = queue_summary(project_id) if project_id else None
-    return jsonify({"ok": True, "unread": int(unread), "items": items, "worker": worker_state(), "queue": q})
+    work = boban_work_overview(project_id) if project_id else None
+    history = job_monitor_snapshot(project_id=project_id,limit=45) if project_id else None
+    if work is not None and history is not None:
+        actual=[{"id":j["id"],"title":j["title"],"why":j["purpose"],"status":j["status"],
+                 "stage":j["stage"],"retry_at":j["run_after"],
+                 "created_at":j["created_at"],"started_at":j["started_at"],
+                 "updated_at":j["updated_at"]}
+                for j in history["items"] if j["status"] in job_monitor.ACTIVE]
+        work["items"]=actual[:8]
+    worker = worker_state("seo_queue")
+    today = worker_runtime.prague_now().date().isoformat()
+    sync_rows = []
+    if project_id:
+        sync_conn = db()
+        try:
+            sync_rows = sync_schedule.latest_status(sync_conn, project_id, today)
+        finally:
+            sync_conn.close()
+    sync_worker = worker_state("daily_sync") if project_id else None
+    health_rows = []
+    if project_id:
+        health_conn = db()
+        try:
+            health_rows = connector_health.list_status(health_conn, project_id)
+        finally:
+            health_conn.close()
+    return jsonify({"ok": True, "unread": int(unread), "items": items,
+                    "worker": worker, "queue": q, "work": work, "job_history": history,
+                    "queue_status": worker_runtime.public_worker_summary(worker, q) if q else None,
+                    "connector_health": [
+                        {"provider": r["provider"], "status": r["status"],
+                         "checked_at": r["checked_at"], "last_success_at": r["last_success_at"],
+                         "error_type": r["error_type"]} for r in health_rows
+                    ] if project_id else None,
+                    "daily_sync": {
+                        "date": today,
+                        "runs": [{"provider": r["provider"], "status": r["status"],
+                                  "finished_at": r["finished_at"]} for r in sync_rows],
+                        "worker": sync_worker
+                    } if project_id else None})
 
 
 @app.route("/api/notifications/read", methods=["POST"])
@@ -9683,13 +10195,30 @@ def api_notifications_state():
     return jsonify({"ok": True})
 
 
+@app.route("/projects/<int:project_id>/sync/run-now", methods=["POST"])
+@login_required
+def project_sync_run_now(project_id):
+    project_for_user(project_id)
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id)
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id) if requested else False
+    flash((f"Požadavek na {requested} zdrojů je trvale uložený. "
+           + ("Spouštím zpracování." if kicked else "Převezme jej nejbližší cron."))
+          if requested else "Nemám nový připravený zdroj nebo jeho synchronizace už probíhá.",
+          "info")
+    return redirect(url_for("connectors", project_id=project_id))
+
+
 @app.route("/projects/<int:project_id>/actions/process-now", methods=["POST"])
 @login_required
 def actions_process_now(project_id):
     project_for_user(project_id)
-    kicked = kick_background_worker("seo-apply")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    kicked = kick_background_worker("work-queue")
     if kicked:
-        flash("Spustil jsem zpracování fronty. Stránku můžeš klidně opustit; o výsledku tě upozorním.", "success")
+        flash("Požádal jsem server o spuštění fronty. Skutečný postup a případné chyby zobrazím v průběhu.", "info")
     else:
         flash("Nepodařilo se spustit worker přímo z aplikace. Fronta zůstává bezpečně uložená a čeká na serverový cron.", "error")
     return redirect(url_for("actions", project_id=project_id, view="todo"))
@@ -9972,15 +10501,12 @@ def google_callback():
 @login_required
 def performance_sync(project_id):
     project_for_user(project_id)
-    try:
-        data = sync_pagespeed_crux(project_id)
-        mobile = data.get("mobile") or {}; crux = data.get("crux") or {}
-        msg = f"Výkon načten: mobile Lighthouse {mobile.get('performance_score') if mobile.get('performance_score') is not None else '—'}/100."
-        if crux.get("available"):
-            msg += f" CrUX p75: LCP {int(crux.get('lcp_ms') or 0)} ms, INP {int(crux.get('inp_ms') or 0)} ms, CLS {float(crux.get('cls') or 0):.3f}."
-        flash(msg, "success")
-    except Exception as exc:
-        flash(f"PageSpeed/CrUX synchronizace selhala: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="pagespeed_crux")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="pagespeed_crux") if requested else False
+    flash(("Ruční načtení pagespeed_crux je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10003,11 +10529,12 @@ def gtm_container(project_id):
 @login_required
 def gtm_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_gtm(project_id); counts=data.get("counts") or {}
-        flash(f"GTM audit hotový: {counts.get('tags',0)} tagů, {counts.get('triggers',0)} triggerů, {counts.get('variables',0)} proměnných.", "success")
-    except Exception as exc:
-        flash(f"GTM audit selhal: {exc}", "error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="gtm")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="gtm") if requested else False
+    flash(("Ruční načtení gtm je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("connectors", project_id=project_id))
 
 
@@ -10043,9 +10570,12 @@ def search_console_property(project_id):
 @login_required
 def search_console_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_search_console(project_id); cur=data.get("current") or {}; flash(f"Search Console načtena: {int(cur.get('clicks') or 0)} kliknutí, {int(cur.get('impressions') or 0)} impresí a {len(data.get('top_queries') or [])} dotazů.","success")
-    except Exception as exc: flash(f"Synchronizace Search Console selhala: {exc}","error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="search_console")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="search_console") if requested else False
+    flash(("Ruční načtení search_console je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
@@ -10135,9 +10665,12 @@ def ga4_property(project_id):
 @login_required
 def ga4_sync(project_id):
     project_for_user(project_id)
-    try:
-        data=sync_ga4(project_id); cur=data.get("current") or {}; flash(f"GA4 načtena: Organic Search {int(cur.get('sessions') or 0)} návštěv, {float(cur.get('keyEvents') or 0):.0f} klíčových událostí.","success")
-    except Exception as exc: flash(f"Synchronizace GA4 selhala: {exc}","error")
+    if not getattr(current_user, "can_edit", False):
+        abort(403)
+    requested = request_manual_data_sync(project_id, provider="ga4")
+    kicked = kick_background_worker("daily-sync-force", project_id=project_id, provider="ga4") if requested else False
+    flash(("Ruční načtení ga4 je uložené. " + ("Předal jsem je workeru." if kicked else "Zpracuje je nejbližší cron."))
+          if requested else "Zdroj není nakonfigurovaný, nebo už synchronizace běží.", "info")
     return redirect(request.referrer or url_for("search_performance",project_id=project_id))
 
 
@@ -10208,6 +10741,17 @@ def _safe_diagnostic_manifest():
         try:
             rows=conn.execute("SELECT status, COUNT(*) AS n FROM jobs WHERE job_type IN ('seo_ai_prepare','seo_growth_prepare','seo_apply_action','seo_verify_action') GROUP BY status").fetchall()
             result['scheduler']['seo_queue_counts']={str(r['status']):int(r['n']) for r in rows}
+            progress=job_monitor.stats(conn)
+            result['scheduler']['execution_progress']={
+                'active': progress['active'],
+                'completed_last_15_minutes': progress['completed_15m'],
+                'last_confirmed_completed_at': progress['last_completed'],
+                'last_started_at': progress['last_started'],
+                'oldest_waiting_at': progress['oldest_waiting']
+            }
+            result['scheduler']['planning_worker']=worker_state('boban_planner')
+            result['scheduler']['connector_probe_worker']=worker_state('connector_health')
+            result['scheduler']['daily_sync_worker']=worker_state('daily_sync')
         except Exception:
             result['scheduler']['seo_queue_counts_unavailable']=True
         projects=conn.execute('SELECT id FROM projects ORDER BY id LIMIT 100').fetchall()
@@ -10300,7 +10844,7 @@ def health():
         "database_ok": db_ok,
         "database_error": db_error,
         "worker": wstate,
-        "background_sync": "durable DB queue + detached worker + manage.py tick safety net"
+        "background_sync": "durable DB queue + work-queue cron; daily-sync, connector-heartbeat and boban-cycle are separate scheduled commands"
     }), (200 if db_ok else 503)
 
 

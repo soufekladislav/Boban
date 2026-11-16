@@ -1,0 +1,21 @@
+{# Boban speaks in outcomes, not cron/worker terminology. Live, project-scoped polling
+   supplies verified status; do not fabricate an ETA before real duration samples exist. #}
+<section class="card boban-work-overview" data-boban-work data-project-id="{{ project.id }}" aria-label="Co právě dělá Boban">
+  <div class="boban-work-top">
+    <div>
+      <span class="eyebrow">BOBAN PRACUJE PRO TEBE</span>
+      <strong data-work-title>Zjišťuji stav úkolů…</strong>
+    </div>
+    <a class="muted small" href="{{ url_for('actions', project_id=project.id, view='todo') }}">Všechny úkoly →</a>
+  </div>
+  <p data-work-why aria-live="polite">Načítám, co právě řeším a proč.</p>
+  <div class="boban-work-meta">
+    <span data-work-progress>Ověřuji aktuální stav</span>
+    <span data-work-eta>Čas dokončení zatím není ověřený.</span>
+  </div>
+  <details class="boban-work-details">
+    <summary>Co přesně mám rozpracované</summary>
+    <ul data-work-list class="boban-work-items"><li>Načítám úkoly…</li></ul>
+    <small class="muted" data-work-help>Schválené změny převezmu automaticky. Rozhodnutí, která vyžadují souhlas, nepřeskočím.</small>
+  </details>
+</section>

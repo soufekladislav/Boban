@@ -146,6 +146,12 @@ def analyze(conn,project_id,question):
     
     sources = [s for s in (gsrc, ssrc) if s]
     result = {'tool': tool, 'evidence_sources': sources, 'limitations': [], 'facts': {}}
+    connections = conn.execute("SELECT provider,status,updated_at FROM integrations WHERE project_id=? ORDER BY provider",
+                               (project_id,)).fetchall()
+    result['facts']['connections'] = [
+        {'provider': r['provider'], 'status': r['status'], 'updated_at': r['updated_at'],
+         'live_health_verified': False} for r in connections
+    ]
     
     period = ga4.get('period') or {}
     current = ga4.get('current_total') or {}
@@ -162,28 +168,32 @@ def analyze(conn,project_id,question):
     
     outcome_rows = conn.execute('SELECT outcome_type, status, test_record, amount, currency FROM analytics_business_outcomes WHERE project_id=? ORDER BY id DESC LIMIT 1000', (project_id,)).fetchall()
     verified_outcomes = [r for r in outcome_rows if r['test_record'] == 0]
-    real_orders = sum(1 for r in verified_outcomes if r['outcome_type'] == 'order' and r['status'] not in ('failed', 'cancelled', 'refunded', 'trash')) if outcome_rows else 0
+    real_orders = (sum(1 for r in verified_outcomes if r['outcome_type'] == 'order'
+                       and r['status'] not in ('failed', 'cancelled', 'refunded', 'trash'))
+                   if verified_outcomes else None)
     
     result['facts']['business_outcomes'] = {
-        'source_connected_and_verified': bool(outcome_rows),
+        'source_connected_and_verified': bool(verified_outcomes),
         'real_orders': real_orders,
+        'real_orders_in_loaded_sample': real_orders,
+        'sample_complete': False,
     }
 
     business_initiatives = []
     
-    if not outcome_rows and current.get('keyEvents', 0) == 0:
+    if not verified_outcomes:
         business_initiatives.append({
             'priority': 1,
             'title': 'Zprovoznit a ověřit nákupní měření (Funnel)',
-            'reason': 'Nemáme spolehlivě potvrzené konverze ani nákupní události (purchase / poptávky). Dokud nevidíme peníze, nemá smysl plýtvat energií na SEO.',
+            'reason': 'Chybí ověřený obchodní výstup; nula záznamů neznamená nula prodejů. Zkontrolujeme měření a zdroj objednávek.',
             'action_needed': 'Zkontrolovat GA4 a GTM měření, ověřit průchodnost košíku.',
             'owner': 'Boban + Uživatel'
         })
     else:
         business_initiatives.append({
             'priority': 1,
-            'title': 'Měření konverzí je aktivní',
-            'reason': f'Zaznamenáváme konverzní události. Aktuální tržby / klíčové akce: {current.get("keyEvents", 0)} událostí.',
+            'title': 'Ověřené obchodní záznamy jsou dostupné',
+            'reason': f'Ve vzorku posledních 1000 výsledků eviduji {real_orders} potvrzených objednávek. Bez ověření úplnosti a období to není celkový prodej.',
             'action_needed': 'Průběžně sledovat trend v čase.',
             'owner': 'Boban'
         })
@@ -217,6 +227,10 @@ def analyze(conn,project_id,question):
     result['facts']['business_initiatives'] = business_initiatives
     result['next_steps'] = [{'priority': 'high', 'action': x['title'], 'why': x['reason'], 'needs_user': x['owner']} for x in business_initiatives]
     
+    if tool == 'channel_readiness':
+        result['limitations'].append('Uložený stav konektoru connected neznamená měřitelný obchodní výsledek ani ověřený živý přístup.')
+    elif not verified_outcomes:
+        result['limitations'].append('Chybí ověřený obchodní zdroj pro celkový počet objednávek; nulu nesmíme odhadovat.')
     if not ga4: result['limitations'].append('GA4 snapshot není k dispozici.')
     if not gsc: result['limitations'].append('Search Console snapshot není k dispozici.')
     return result
