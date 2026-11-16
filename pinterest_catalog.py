@@ -64,3 +64,58 @@ def build_pinterest_feed(project_name, parents, variants, site_url):
     report['locale'] = 'cs_CZ'
     report['ingested_by_pinterest'] = False
     return ET.tostring(root, encoding='utf-8', xml_declaration=True), report
+
+
+def convert_google_xml(source_xml, project_name, existing_report=None):
+    """Reuse the last published Google XML, only after the caller proves approval.
+
+    Keep a previously approved snapshot usable during a new incomplete sync.
+    Do not publish stale revisions or claim Pinterest API ingestion.
+    """
+    if len(source_xml) > 32 * 1024 * 1024:
+        raise ValueError('Publikované Google XML překračuje bezpečnostní limit 32 MB.')
+    try:
+        root = ET.fromstring(source_xml)
+    except ET.ParseError as exc:
+        raise ValueError('Publikovaný Google XML není platný. Oprav zdrojový katalog.') from exc
+    channel = root.find('channel') if root.tag == 'rss' else None
+    if channel is None:
+        raise ValueError('Chybí RSS kanál produktů.')
+    heading = channel.find('title')
+    if heading is not None:
+        heading.text = project_name + ' – Pinterest produkty'
+    items = channel.findall('item')
+    if not items:
+        raise ValueError('Publikovaný Google XML neobsahuje žádné položky.')
+    seen = set()
+    for item in items:
+        ident = item.findtext('{'+GNS+'}id')
+        link = item.findtext('link')
+        image = item.findtext('{'+GNS+'}image_link')
+        price = item.findtext('{'+GNS+'}price')
+        if (not ident or ident in seen or not item.findtext('title') or
+                not merchant_export.public_url(link) or
+                not merchant_export.public_url(image) or not price):
+            raise ValueError('Publikované Google XML obsahuje neplatný nebo duplicitní produkt.')
+        seen.add(ident)
+        description = item.find('description')
+        if description is not None:
+            description.text = plain_text(description.text)[:10000]
+        availability = item.find('{'+GNS+'}availability')
+        if availability is None or availability.text not in ('in_stock','out_of_stock','backorder'):
+            raise ValueError('Zdrojový produkt nemá platnou dostupnost.')
+        availability.text = {
+            'in_stock': 'in stock', 'out_of_stock': 'out of stock',
+            'backorder': 'out of stock'
+        }[availability.text]
+    result = dict(existing_report or {})
+    result.update({
+        'exported': len(items), 'format': 'PINTEREST_RSS_2.0',
+        'country': 'CZ', 'locale': 'cs_CZ',
+        'ingested_by_pinterest': False,
+        'source': 'last_approved_google_snapshot'
+    })
+    result.setdefault('omitted', 0)
+    result.setdefault('errors', [])
+    result.setdefault('warnings', [])
+    return ET.tostring(root, encoding='utf-8', xml_declaration=True), result
