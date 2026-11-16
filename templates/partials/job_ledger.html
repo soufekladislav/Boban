@@ -42,7 +42,7 @@
         <th>Stav</th><th>Zařazeno</th><th>Spuštěno</th><th>Poslední aktivita</th><th>Dokončeno</th>
       </tr></thead>
       <tbody data-job-rows>
-      {% for j in job_monitor.items %}
+      {% for j in job_monitor['items'] %}
         <tr data-job-id="{{ j.id }}">
           <td><strong>{{ j.title }}</strong><small>{{ j.purpose }}</small><small>Evidence #{{ j.id }}{% if j.action_id %} · akce #{{ j.action_id }}{% endif %}{% if j.action_url %} · <a href="{{ j.action_url }}">Detail změny</a>{% endif %}</small></td>
           {% if job_monitor_admin|default(false) %}<td>{{ j.project_name or 'Projekt #' ~ j.project_id }}</td>{% endif %}
