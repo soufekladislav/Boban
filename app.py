@@ -8678,9 +8678,13 @@ def pinterest_settings(project_id):
 
 
 def catalog_publish_pinterest(project_id):
-    """One approved selection, Pinterest-specific RSS, atomic file, separate output."""
-    if not catalog_ready(project_id):
-        raise ValueError('Nejdříve dokonči načtení produktů i variant.')
+    """One approved selection, Pinterest-specific RSS, atomic file, separate output.
+
+    An already published Google snapshot of the CURRENT approved revision is
+    sufficient during an unfinished new sync. Never publish an unapproved
+    revision or a partly imported product catalog.
+    """
+    ready=catalog_ready(project_id)
     conn=db()
     try:
         project=conn.execute('SELECT * FROM projects WHERE id=?',(project_id,)).fetchone()
@@ -8689,20 +8693,42 @@ def catalog_publish_pinterest(project_id):
         if not state.get('approved'):raise ValueError('Nejdříve schval společný sortiment.')
         rec=conn.execute('SELECT feed_token FROM project_pinterest_feeds WHERE project_id=?',(project_id,)).fetchone()
         token=rec['feed_token'] if rec else secrets.token_urlsafe(32)
+        google=conn.execute(
+            'SELECT feed_token,generated_at,report_json FROM project_google_feeds WHERE project_id=?',
+            (project_id,)
+        ).fetchone()
+        has_current_google=bool(google and google['generated_at']
+                                and int(state.get('published_revision') or 0)==int(state.get('revision') or 0))
     finally:
         conn.close()
-    parents,variants,excluded,_=catalog_cached_data(project_id)
-    if len(parents)+len(variants)>CATALOG_MAX_EXPORT_ROWS:
-        raise ValueError('Katalog překročil bezpečný limit exportu.')
-    categories=(refresh_catalog_categories(project_id,project['site_url'])
-                if excluded['category'] else (cached_catalog_categories(project_id)
-                or feed_workflow.category_tree(parents)))
-    chosen_p,chosen_v,summary=feed_workflow.selected(parents,variants,excluded,categories=categories)
-    forbidden=feed_workflow.excluded_category_ids(categories,excluded['category'])
-    if any(feed_workflow.product_category_ids(p)&forbidden for p in chosen_p):
-        raise ValueError('Export obsahuje vyloučenou kategorii.')
-    xml,report=pinterest_catalog.build_pinterest_feed(project['name'],chosen_p,chosen_v,project['site_url'])
-    report['selection']=summary
+    if ready:
+        parents,variants,excluded,_=catalog_cached_data(project_id)
+        if len(parents)+len(variants)>CATALOG_MAX_EXPORT_ROWS:
+            raise ValueError('Katalog překročil bezpečný limit exportu.')
+        categories=(refresh_catalog_categories(project_id,project['site_url'])
+                    if excluded['category'] else (cached_catalog_categories(project_id)
+                    or feed_workflow.category_tree(parents)))
+        chosen_p,chosen_v,summary=feed_workflow.selected(parents,variants,excluded,categories=categories)
+        forbidden=feed_workflow.excluded_category_ids(categories,excluded['category'])
+        if any(feed_workflow.product_category_ids(p)&forbidden for p in chosen_p):
+            raise ValueError('Export obsahuje vyloučenou kategorii.')
+        xml,report=pinterest_catalog.build_pinterest_feed(project['name'],chosen_p,chosen_v,project['site_url'])
+        report['selection']=summary
+        report['source']='current_approved_catalog'
+    else:
+        if not has_current_google:
+            raise ValueError('Načítání produktů/variant ještě není dokončeno a nemám Google XML aktuální schválené revize. '
+                             'Dokonči import nebo nejdřív schval a publikuj Google katalog.')
+        google_path=CATALOG_FEED_DIR/('google_'+str(project_id)+'_'+google['feed_token']+'.xml')
+        if not google_path.is_file():
+            raise ValueError('Poslední schválené Google XML není na serveru. Ověř synchronizaci generated_feeds.')
+        try:
+            source_report=json.loads(google['report_json'] or '{}')
+        except (TypeError,ValueError):
+            source_report={}
+        xml,report=pinterest_catalog.convert_google_xml(
+            google_path.read_bytes(),project['name'],source_report
+        )
     if not report.get('exported'):
         raise ValueError('Pinterest XML nemá žádnou platnou nabídku.')
     CATALOG_FEED_DIR.mkdir(parents=True,exist_ok=True)
