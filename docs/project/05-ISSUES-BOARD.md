@@ -64,3 +64,14 @@
 | [#7](https://github.com/soufekladislav/Boban/pull/7) | Konsolidace #2–#6 | Draft, CI success | **Hold**, neobsahuje #1, vyhodnotit v #9 |
 
 **Nezavírat historická PR automaticky.** Po rozhodnutí o kanonickém release a ověření závislostí lze staré PR uzavřít se zdůvodněním a odkazem na výslednou Issue.
+
+## Inventura již realizovaných funkcí (doplněno 16. 11.)
+
+Vedle implementačního backlogu jsou založeny **evidenční Issues #24–#38**, které mapují schopnosti prokazatelně přítomné v `main`. Nejsou automaticky `Done` — každá vyžaduje vlastní akceptační test. Jejich stručný soupis a doporučené testovací várky jsou v [06 — Inventura existujících funkcí](06-EXISTING-CAPABILITIES.md).
+
+- **#24–#30:** účty/Fresh Key, Fresh Core read, SEO audit, GSC, GA4, GTM, PageSpeed/CrUX.
+- **#31–#32:** Fresh AI Engine, chat a existující strategie/dashboard.
+- **#33–#36:** Woo katalog, Google XML/Merchant, Heureka/Zboží.cz, Meta feed.
+- **#37–#38:** návrhy/revize/schvalování a statistiky/výsledky.
+
+GitHub Project `Status` je nezávislý na otevření/uzavření repozitářového Issue. Dostupný konektor umí repo Issues vytvářet, ale neumí měnit Project V2 `Status`. Nové karty přidej přes `Add item`/Auto-add a testuj ve várkách do limitu pěti položek `In review`.
